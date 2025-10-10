@@ -36,6 +36,9 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
+IsaacLab/
+isaacsim-hand-envs/
+
 # Unit test / coverage reports
 htmlcov/
 .tox/
