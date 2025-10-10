@@ -24,6 +24,12 @@
     </collision>
 </link>
 
+<gazebo reference="screwdriver_body">
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <!-- Isaac Sim maps mu1/mu2 to PhysX static/dynamic friction during URDF→USD import -->
+</gazebo>
+
 <joint name="screwdriver_stick_body_joint" type="fixed">
     <parent link="screwdriver_stick"/>
     <child link="screwdriver_body"/>

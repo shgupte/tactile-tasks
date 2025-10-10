@@ -179,6 +179,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rl-games
     env = RlGamesVecEnvWrapper(env, rl_device, clip_obs, clip_actions)
+    
+    # Add joint movement monitoring
+    # SHAUN ADDED THIS
+   
 
     # register the environment to rl-games registry
     # note: in agents configuration: environment name must be "rlgpu"

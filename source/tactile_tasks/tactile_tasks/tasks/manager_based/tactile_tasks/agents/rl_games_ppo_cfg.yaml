@@ -28,7 +28,7 @@ params:
         sigma_init:
           name: const_initializer
           val: 0
-        fixed_sigma: True
+        fixed_sigma: False
     mlp:
       units: [32, 32]
       activation: elu
