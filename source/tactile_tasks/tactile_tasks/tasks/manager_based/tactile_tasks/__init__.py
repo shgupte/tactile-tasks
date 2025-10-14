@@ -22,3 +22,15 @@ gym.register(
         # "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
     },
 )
+
+# change this
+gym.register(
+    id="TurnScrewdriverContact-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.hand_env_cfg:TestContactEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:hand_env_ppo_config.yaml",
+        # "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+    },
+)

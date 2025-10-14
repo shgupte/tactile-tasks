@@ -27,7 +27,7 @@ params:
           name: default
         sigma_init:
           name: const_initializer
-          val: 0 # used to be 0
+          val: 0.035 # used to be 0
         fixed_sigma: True # used to be True 
     mlp:
       # Larger network for complex hand manipulation
@@ -68,10 +68,14 @@ params:
     # PPO hyperparameters optimized for hand manipulation
     gamma: 0.995  # Higher discount for longer-term rewards
     tau: 0.95     # GAE parameter
-    learning_rate: 2e-4  # Slightly lower for stability
+    learning_rate: 1e-4  # Lowered for stability
     lr_schedule: adaptive
     kl_threshold: 0.008
     score_to_win: 50000  # Higher target for complex task
+    
+    # Standard deviation bounds to prevent negative std
+    min_std: 0.01
+    max_std: 1.0
     
     # Training schedule
     max_epochs: 500
@@ -79,8 +83,8 @@ params:
     save_frequency: 50
     
     # Gradient and optimization settings
-    grad_norm: 1.0
-    entropy_coef: 0.02  # Higher entropy for exploration in complex action space
+    grad_norm: 0.5  # Lowered for stability
+    entropy_coef: 0.01  # Lowered for stability
     truncate_grads: True
     e_clip: 0.2
     
@@ -136,6 +140,6 @@ params:
     # Environment specific settings
     env_config:
       num_envs: 256  # Default, will be overridden by script
-      episode_length: 600  # 5 seconds at 120Hz with decimation=2
+      episode_length: 1800  # 5 seconds at 120Hz with decimation=2
       sim_dt: 0.008333  # 1/120
       decimation: 2

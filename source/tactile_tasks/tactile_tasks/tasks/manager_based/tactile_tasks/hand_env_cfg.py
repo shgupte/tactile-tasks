@@ -23,7 +23,7 @@ import torch
 import isaaclab.envs.mdp as mdp
 from isaaclab.utils.math import quat_apply, matrix_from_quat
 from typing import TYPE_CHECKING
-
+from isaaclab.sensors import ContactSensorCfg
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -76,6 +76,14 @@ class AllegroSceneCfg(InteractiveSceneCfg):
     # articulation
     robot: ArticulationCfg = AllegroCfg(prim_path="{ENV_REGEX_NS}/Robot")
     
+    contact_forces: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*_aftc_base_link$",
+        # prim_path="{ENV_REGEX_NS}/Robot/.*ee$",
+    
+        update_period=0.0,
+        history_length=6,
+        debug_vis=True,
+    )
     # screwdriver_joint_path = "{ENV_REGEX_NS}/Joints/screwdriver_tip_joint"
 
 
@@ -96,7 +104,7 @@ def add_spherical_joint_at_tip(stage: Usd.Stage,
     usd_joint.CreateLocalPos0Attr().Set(Gf.Vec3f(tip_in_parent))
     usd_joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))  # identity
 
-    # Child frame (on screwdriver): tip in the child’s local coordinates
+    # Child frame (on screwdriver): tip in the child's local coordinates
     usd_joint.CreateLocalPos1Attr().Set(Gf.Vec3f(tip_in_child))
     usd_joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))  # identity
 
@@ -255,7 +263,7 @@ class ActionsCfg:
                                                 "allegro_hand_oya_finger_joint_13",
                                                 "allegro_hand_oya_finger_joint_14",
                                                 "allegro_hand_oya_finger_joint_15"],
-                                           scale=1.0, 
+                                           scale=1.0,  # Reduced from 1.0 for stability
                                            preserve_order=True,
                                            clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-2.0, 2.0),
                                                  "allegro_hand_hitosashi_finger_finger_joint_1": (-2.0, 2.0),
@@ -431,6 +439,25 @@ def screwdriver_upright_angle(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg 
         angle = angle * (180.0 / math.pi)
     return angle.unsqueeze(-1)
 
+
+def screwdriver_tilt_exceeds(
+    env: ManagerBasedRLEnv,
+    threshold_deg: float = 25.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
+) -> torch.Tensor:
+    """Return per-env boolean indicating tilt greater than threshold degrees.
+
+    Computes the angle between the screwdriver local z-axis and the world z-axis.
+    Returns True when the tilt angle is strictly greater than ``threshold_deg``.
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    quat = asset.data.root_quat_w
+    rot_matrix = matrix_from_quat(quat)
+    # cos(theta) is the z-component of the local z-axis in world frame
+    cos_theta = torch.clamp(rot_matrix[:, :, 2][:, 2], -1.0, 1.0)
+    threshold_cos = math.cos(math.radians(threshold_deg))
+    return cos_theta < threshold_cos
+
 # ------------------Ignore, since we will be using velocity reward instead------------------
 # def screwdriver_rotation_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
 #     """Reward for cumulative positive rotation around the screwdriver's z-axis."""
@@ -474,20 +501,25 @@ def screwdriver_signed_yaw_velocity_reward(
     gain: float = 1.0,
     vmax: float | None = None,
 ) -> torch.Tensor:
-    """
-    - Units: rad/s by default; set ``degrees=True`` for deg/s.
-    - Optional clipping: set ``vmax`` to clamp velocity to ``[-vmax, vmax]`` before scaling.
-    - Final reward = ``gain * yaw_velocity`` masked to stage 3.
+    """Reward negative (clockwise) yaw velocity, penalize positive (counter-clockwise).
+    
+    - Positive reward for negative yaw_vel (clockwise rotation)
+    - Negative reward for positive yaw_vel (counter-clockwise rotation)
+    - Symmetric: reward magnitude equals penalty magnitude
     """
     asset: RigidObject = env.scene[asset_cfg.name]
-
+    
     yaw_vel = screwdriver_yaw_velocity(env, asset_cfg=asset_cfg, degrees=degrees).squeeze(-1)
     if vmax is not None:
         yaw_vel = torch.clamp(yaw_vel, -vmax, vmax)
-    reward = gain * yaw_vel
-
-    # Is this practical?
-    return torch.exp(reward)
+    
+    # Reward = gain * (-yaw_vel)
+    # When yaw_vel is negative (clockwise), reward is positive
+    # When yaw_vel is positive (counter-clockwise), reward is negative (penalty)
+    base = -gain * yaw_vel
+    # Gate by curriculum stage: Stage 0 = off; Stage 1+ = on
+    stage = _get_curriculum_stage(env)
+    return base * (stage >= 1).float()
 
 
 def screwdriver_yaw_velocity(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"), degrees: bool = False) -> torch.Tensor:
@@ -575,10 +607,46 @@ def screwdriver_stability_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityC
     vel_xy = ang_vel_local[:, :2]
     if degrees:
         vel_xy = vel_xy * (180.0 / math.pi)
-    return torch.exp(torch.sum(vel_xy * vel_xy, dim=1))
+    return torch.exp(-torch.sum(vel_xy * vel_xy, dim=1))
 
 
-# removed torque penalty
+# Effort and energy penalties
+
+def torque_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+                   joint_names: list[str] | None = None, weight: float = 1e-2) -> torch.Tensor:
+    """Penalize squared actuator torques per env: -weight * sum(tau^2)."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    if joint_names is None:
+        joint_ids = torch.arange(asset.num_joints, device=env.device)
+    else:
+        joint_ids, _ = asset.find_joints(joint_names, preserve_order=True)
+    tau = asset.data.applied_torque[:, joint_ids]
+    base = -weight * torch.sum(tau * tau, dim=1)
+    # Stage-gated scaling: small penalty in Stage 0, full in Stage 1+
+    stage = _get_curriculum_stage(env)
+    w = torch.where(stage == 0, torch.full_like(base, 0.25), torch.full_like(base, 1.0))
+    return w * base
+
+def energy_penalty_abs(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+                       joint_names: list[str] | None = None, scale: float = 5e-2) -> torch.Tensor:
+    """Penalize per-step mechanical energy via |tau * qd| integrated over dt.
+
+    Returns approximately -scale * energy[J] per step per env.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    if joint_names is None:
+        joint_ids = torch.arange(asset.num_joints, device=env.device)
+    else:
+        joint_ids, _ = asset.find_joints(joint_names, preserve_order=True)
+    tau = asset.data.applied_torque[:, joint_ids]
+    qd = asset.data.joint_vel[:, joint_ids]
+    power_abs = torch.sum(torch.abs(tau * qd), dim=1)  # |W|
+    dt = env.physics_dt
+    base = -scale * power_abs * dt
+    # Stage-gated scaling: small penalty in Stage 0, full in Stage 1+
+    stage = _get_curriculum_stage(env)
+    w = torch.where(stage == 0, torch.full_like(base, 0.25), torch.full_like(base, 1.0))
+    return w * base
 
 
 def finger_joint_deviation_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), degrees: bool = False) -> torch.Tensor:
@@ -611,7 +679,7 @@ def finger_joint_deviation_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntit
     
     mask = (stage >= 1).float()
     # Do I need the exp?
-    return torch.exp(deviation_penalty * mask)
+    return -deviation_penalty * mask
 
 # Should probably not be using this
 # UPDATE: I DO NOT USE THIS ANYMORE
@@ -708,15 +776,19 @@ def curriculum_reward_weights(env: ManagerBasedRLEnv, env_ids: torch.Tensor = No
     # Stage 0: Focus purely on upright stability - no rotation concerns
     if CURRENT_CURRICULUM_STAGE == 0:
         upright_weight = 1.0
+        torque_weight = 0.0
+        energy_weight = 0.0
         rotation_weight = 0.0  # No rotation reward in Stage 0
         stability_weight = 0.2  # Some stability to encourage smooth control
         deviation_weight = 0.0
     # Stage 1: Balance upright and rotation with increased stability
     else:
-        upright_weight = 0.3
+        upright_weight = 0.3   
+        torque_weight = 0.3
+        energy_weight = 0.3
         rotation_weight = 1.0
         stability_weight = 0.4  # Increased stability reward in Stage 1
-        deviation_weight = 0.0
+        deviation_weight = 0.2
     
     return torch.tensor([upright_weight, rotation_weight, stability_weight], device=env.device)
 
@@ -822,6 +894,57 @@ def reset_curriculum_stage(env: ManagerBasedRLEnv, stage: int = 0) -> None:
 #     return reached
 
 # #------------------Ignore, since we will be using velocity reward instead------------------
+
+def log_contact_sensor_sample(env, env_ids=None) -> None:
+        # Access the sensor by its config name ("contact_forces" in AllegroSceneCfg)
+        sensor = env.scene["contact_forces"]
+
+        # Try common fields; fall back to introspection so you can see what's available
+        data = sensor.data
+        if hasattr(data, "net_forces_w"):
+            f = data.net_forces_w          # shape: (num_envs, num_bodies, 3)
+        elif hasattr(data, "forces_w"):
+            f = data.forces_w              # shape: (num_envs, num_bodies, 3)
+        else:
+            # print("Contact sensor fields:", [k for k in dir(data) if not k.startswith("_")])
+            return
+
+        # Example: print max contact force magnitude per env (first few)
+        # import torch_
+        f_norm = torch.linalg.norm(f, dim=-1)  # (num_envs, num_bodies)
+        max_per_env = f_norm.max(dim=1).values
+        # print("[CONTACT] max |F| per env (first 8):", max_per_env[:8].tolist())
+
+
+def contact_forces_obs(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Observation function for contact forces from contact sensors.
+    
+    Args:
+        env: The environment instance.
+        sensor_cfg: Configuration for the contact sensor.
+        
+    Returns:
+        Contact forces tensor with shape (num_envs, num_bodies * 3) flattened.
+    """
+    # Access the contact sensor by its config name
+    sensor = env.scene[sensor_cfg.name]
+    data = sensor.data
+    
+    # Get contact forces - try different possible attribute names
+    if hasattr(data, "net_forces_w"):
+        forces = data.net_forces_w  # shape: (num_envs, num_bodies, 3)
+    elif hasattr(data, "forces_w"):
+        forces = data.forces_w      # shape: (num_envs, num_bodies, 3)
+    else:
+        # Fallback: return zeros if sensor data not available
+        num_envs = env.num_envs
+        num_bodies = 4  # Assuming 4 finger tips based on the sensor config
+        forces = torch.zeros((num_envs, num_bodies, 3), device=env.device)
+    
+    # Flatten the forces tensor: (num_envs, num_bodies, 3) -> (num_envs, num_bodies * 3)
+    return forces.flatten(start_dim=1)
+
+
 @configclass
 class ObservationsCfg:
     """Observation specifications for the MDP."""
@@ -869,6 +992,70 @@ class ObservationsCfg:
             func=screwdriver_angular_velocity_z,
             noise=None,
             params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        )
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    # observation groups
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class ContactObservationCfg:
+    """Observation specifications for the MDP with contact sensor data."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Observations for policy group including contact forces."""
+
+        # observation terms (order preserved)
+        joint_pos = ObsTerm(func=joint_pos_in_order, noise=None, 
+                        params={"asset_cfg": SceneEntityCfg("robot",
+                        joint_names=["allegro_hand_hitosashi_finger_finger_joint_0",
+                                        "allegro_hand_hitosashi_finger_finger_joint_1",
+                                        "allegro_hand_hitosashi_finger_finger_joint_2",
+                                        "allegro_hand_hitosashi_finger_finger_joint_3",
+                                        "allegro_hand_naka_finger_finger_joint_4",
+                                        "allegro_hand_naka_finger_finger_joint_5",
+                                        "allegro_hand_naka_finger_finger_joint_6",
+                                        "allegro_hand_naka_finger_finger_joint_7",
+                                        "allegro_hand_kusuri_finger_finger_joint_8",
+                                        "allegro_hand_kusuri_finger_finger_joint_9",
+                                        "allegro_hand_kusuri_finger_finger_joint_10",
+                                        "allegro_hand_kusuri_finger_finger_joint_11",
+                                        "allegro_hand_oya_finger_joint_12",
+                                        "allegro_hand_oya_finger_joint_13",
+                                        "allegro_hand_oya_finger_joint_14",
+                                        "allegro_hand_oya_finger_joint_15"])})
+
+        # Screwdriver pose (position + quaternion)
+        screwdriver_pose = ObsTerm(
+            func=screwdriver_pose,
+            noise=None,
+            params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        )
+
+        # Screwdriver z-axis orientation (for upright tracking)
+        screwdriver_orientation_z = ObsTerm(
+            func=screwdriver_orientation_z_axis,
+            noise=None,
+            params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        )
+
+        # Screwdriver angular velocity around z-axis (for rotation tracking)
+        screwdriver_angular_velocity_z = ObsTerm(
+            func=screwdriver_angular_velocity_z,
+            noise=None,
+            params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        )
+
+        # Contact forces from finger tips
+        contact_forces = ObsTerm(
+            func=contact_forces_obs,
+            noise=None,
+            params={"sensor_cfg": SceneEntityCfg("contact_forces")},
         )
 
         def __post_init__(self) -> None:
@@ -956,6 +1143,13 @@ class EventCfg:
         mode="interval",
         interval_range_s=(5.0, 5.0),  # Check every 5 seconds
     )
+    
+    # Log contact sensor readings every 0.2 seconds
+    contact_sensor_log = EventTerm(
+        func=log_contact_sensor_sample,
+        mode="interval",
+        interval_range_s=(0.2, 0.2),  # Log every 0.2s
+    )
 
 
     
@@ -973,11 +1167,11 @@ class RewardsCfg:
     
     # I'm not sure if I wnat the terminating and alive rewards; the paper does not mention them
     
-    # (1) Constant running reward
-    alive = RewTerm(func=mdp.is_alive, weight=0.5)
+    # (1) Constant running reward (keep small so it doesn't dominate)
+    alive = RewTerm(func=mdp.is_alive, weight=0.1)
     
-    # (2) Failure penalty
-    terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
+    # (2) Failure penalty (comparable scale with other terms)
+    terminating = RewTerm(func=mdp.is_terminated, weight=0.0)
     
     ## Penalizes deviation from upright; paper only punishes unwanted angular velocitioes
     # screwdriver_upright = RewTerm(
@@ -989,14 +1183,20 @@ class RewardsCfg:
     # (4) Rotation velocity reward - partial reward for positive rotation
     screwdriver_rotation = RewTerm(
         func=screwdriver_signed_yaw_velocity_reward,
-        weight=200.0,  # Moderate weight for encouraging rotation
-        params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        # Map yaw velocity roughly to [-1, 1] via gain and vmax
+        weight=3.0,
+        params={
+            "asset_cfg": SceneEntityCfg("screwdriver"),
+            "gain": 0.1,     # if vmax=10 rad/s -> gain * vmax ≈ 1
+            "vmax": 10.0,    # clamp to avoid outliers
+        },
     )
     
     # (5) Stability reward: minimize unwanted angular velocities
     screwdriver_stability = RewTerm(
         func=screwdriver_stability_reward,
-        weight=8.0,  # Always important for smooth control
+        # stability reward returns exp(-||w_xy||^2) ∈ (0, 1], keep weight ~1
+        weight=1.0,
         params={"asset_cfg": SceneEntityCfg("screwdriver")},
     )
 
@@ -1026,6 +1226,18 @@ class RewardsCfg:
         ])},
     )
 
+    # (7) Effort and energy regularization
+    torque_mag_penalty = RewTerm(
+        func=torque_penalty,
+        weight=1.0,
+        params={"asset_cfg": SceneEntityCfg("robot"), "joint_names": None, "weight": 1e-3},
+    )
+    energy_penalty = RewTerm(
+        func=energy_penalty_abs,
+        weight=1.0,
+        params={"asset_cfg": SceneEntityCfg("robot"), "joint_names": None, "scale": 5e-4},
+    )
+
     
     # (8) Curriculum-based combined reward (alternative to individual rewards)
     # curriculum_reward = RewTerm(
@@ -1041,11 +1253,11 @@ class TerminationsCfg:
     # (1) Time out
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     
-    # (2) Screwdriver fell over (beyond threshold angle)
-    # screwdriver_fell_over = DoneTerm(
-    #     func=screwdriver_fell_over,
-    #     params={"threshold_angle": 20.0, "asset_cfg": SceneEntityCfg("screwdriver")},
-    # )
+    # (2) Screwdriver tilt exceeds threshold (terminate when > 25 degrees from upright)
+    screwdriver_tilt_limit = DoneTerm(
+        func=screwdriver_tilt_exceeds,
+        params={"threshold_deg": 20.0, "asset_cfg": SceneEntityCfg("screwdriver")},
+    )
 
     # (3) Success termination: reached current target angle per-env
 
@@ -1089,12 +1301,34 @@ class TestEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 2
         self.episode_length_s = 5
         # Enable viewer with proper configuration
-        self.viewer.eye = (2.0, 2.0, 2.0)
+        self.viewer.eye = (2.0, 0.0, 1.0)
         self.viewer.lookat = (0.0, 0.0, 0.0)  # Look at the center
         self.viewer.origin_type = "world"  # Fixed world camera
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
-
+        
+@configclass
+class TestContactEnvCfg(ManagerBasedRLEnvCfg):
+    """Test configuration with viewer enabled."""
+    
+    # scene: AllegroSceneCfg = AllegroSceneCfg(num_envs=1, env_spacing=4.0, clone_in_fabric=True)
+    scene = AllegroSceneCfg(num_envs=256, env_spacing=4.0, clone_in_fabric=False)
+    actions: ActionsCfg = ActionsCfg()
+    rewards: RewardsCfg = RewardsCfg()
+    observations: ObservationsCfg = ContactObservationCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+    events: EventCfg = EventCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
+    
+    def __post_init__(self) -> None:
+        self.decimation = 2
+        self.episode_length_s = 5
+        # Enable viewer with proper configuration
+        self.viewer.eye = (2.0, 0.0, 1.0)
+        self.viewer.lookat = (0.0, 0.0, 0.0)  # Look at the center
+        self.viewer.origin_type = "world"  # Fixed world camera
+        self.sim.dt = 1 / 120
+        self.sim.render_interval = self.decimation
 
 @configclass
 class ScrewdriverCurriculumEnvCfg(ManagerBasedRLEnvCfg):
@@ -1116,3 +1350,7 @@ class ScrewdriverCurriculumEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.origin_type = "world"
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
+
+
+
+    

@@ -195,6 +195,18 @@
     <child link="hitosashi_ee"/>
   </joint>
   <link name="hitosashi_ee">
+    <visual>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <material name="red"/>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+    </collision>
     <inertial>
         <mass value="0.0001"/>
         <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -341,6 +353,18 @@
     <child link="naka_ee"/>
   </joint>
   <link name="naka_ee">
+    <visual>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <material name="green"/>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+    </collision>
     <inertial>
         <mass value="0.0001"/>
         <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -485,6 +509,18 @@
     <child link="kusuri_ee"/>
   </joint>
   <link name="kusuri_ee">
+    <visual>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+    </collision>
     <inertial>
         <mass value="0.0001"/>
         <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -628,6 +664,18 @@
     <child link="oya_ee"/>
   </joint>
   <link name="oya_ee">
+    <visual>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <material name="yellow"/>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+    </collision>
     <inertial>
         <mass value="0.0001"/>
         <origin rpy="0 0 0" xyz="0 0 0"/>

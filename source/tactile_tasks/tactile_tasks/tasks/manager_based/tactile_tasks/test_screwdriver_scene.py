@@ -166,8 +166,48 @@ def main():
         print("\n[INFO]: Exiting simulation...")
 
 
+def visualize_starting_position():
+    """Simple visualization of the starting position using TestSceneCfg."""
+    print("🎬 Starting position visualization...")
+    
+    # Create scene configuration with viewer enabled
+    scene_cfg = TestSceneCfg(num_envs=1, env_spacing=4.0)
+    
+    # Create the scene
+    scene = InteractiveScene(scene_cfg)
+    
+    # Initialize the scene
+    scene.reset()
+    
+    # Set up screwdriver constraints
+    setup_screwdriver_constraints(scene)
+    
+    # Get simulation context
+    sim_context = SimulationContext()
+    sim_context.reset()
+    
+    # Simple visualization loop
+    print("📹 Visualization running... Press Ctrl+C to exit")
+    try:
+        while simulation_app.is_running():
+            sim_context.step()
+    except KeyboardInterrupt:
+        print("\n[INFO]: Exiting visualization...")
+    
+    # Clean up
+    scene.close()
+
+
 if __name__ == "__main__":
-    # run the main function
-    main()
+    import sys
+    
+    # Check if we want to run the full test or just visualization
+    if len(sys.argv) > 1 and sys.argv[1] == "--visualize":
+        # Run simple visualization
+        visualize_starting_position()
+    else:
+        # Run the full test
+        main()
+    
     # close sim app
     simulation_app.close()
