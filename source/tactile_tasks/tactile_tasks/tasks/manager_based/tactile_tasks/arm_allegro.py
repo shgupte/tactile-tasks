@@ -35,7 +35,7 @@ class AllegroCfg(ArticulationCfg):
             # Screwdriver initial pos is set to (-0.02, 0.05, 0.075)
             # Lower the hand to be closer to the screwdriver shaft
             # pos=(-0.01, -0.03, 0.25),
-            pos=(0.0, -0.01, 0.31),
+            pos=(0.0, -0.01, 0.27),
             # Flip hand upside down with -20° X-axis rotation, then add -20° Y-axis rotation
             # -20° Y rotation ⊗ (180° Y ⊗ -20° X) = (-0.173648, 0.984807, -0.173648, 0.0)
             rot=( .707107, 0.0, 0.707107, 0.0),

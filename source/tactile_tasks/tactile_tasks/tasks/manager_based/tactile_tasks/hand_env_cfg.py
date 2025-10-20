@@ -265,22 +265,39 @@ class ActionsCfg:
                                                 "allegro_hand_oya_finger_joint_15"],
                                            scale=1.0,  # Reduced from 1.0 for stability
                                            preserve_order=True,
-                                           clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-2.0, 2.0),
-                                                 "allegro_hand_hitosashi_finger_finger_joint_1": (-2.0, 2.0),
-                                                 "allegro_hand_hitosashi_finger_finger_joint_2": (-2.0, 2.0),
-                                                 "allegro_hand_hitosashi_finger_finger_joint_3": (-2.0, 2.0),
-                                                 "allegro_hand_naka_finger_finger_joint_4": (-2.0, 2.0),
-                                                 "allegro_hand_naka_finger_finger_joint_5": (-2.0, 2.0),
-                                                 "allegro_hand_naka_finger_finger_joint_6": (-2.0, 2.0),
-                                                 "allegro_hand_naka_finger_finger_joint_7": (-2.0, 2.0),
-                                                 "allegro_hand_kusuri_finger_finger_joint_8": (-2.0, 2.0),
-                                                 "allegro_hand_kusuri_finger_finger_joint_9": (-2.0, 2.0),
-                                                 "allegro_hand_kusuri_finger_finger_joint_10": (-2.0, 2.0),
-                                                 "allegro_hand_kusuri_finger_finger_joint_11": (-2.0, 2.0),
-                                                 "allegro_hand_oya_finger_joint_12": (-2.0, 2.0),
-                                                 "allegro_hand_oya_finger_joint_13": (-2.0, 2.0),
-                                                 "allegro_hand_oya_finger_joint_14": (-2.0, 2.0),
-                                                 "allegro_hand_oya_finger_joint_15": (-2.0, 2.0)}
+                                        #    clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-2.0, 2.0),
+                                        #          "allegro_hand_hitosashi_finger_finger_joint_1": (-2.0, 2.0),
+                                        #          "allegro_hand_hitosashi_finger_finger_joint_2": (-2.0, 2.0),
+                                        #          "allegro_hand_hitosashi_finger_finger_joint_3": (-2.0, 2.0),
+                                        #          "allegro_hand_naka_finger_finger_joint_4": (-2.0, 2.0),
+                                        #          "allegro_hand_naka_finger_finger_joint_5": (-2.0, 2.0),
+                                        #          "allegro_hand_naka_finger_finger_joint_6": (-2.0, 2.0),
+                                        #          "allegro_hand_naka_finger_finger_joint_7": (-2.0, 2.0),
+                                        #          "allegro_hand_kusuri_finger_finger_joint_8": (-2.0, 2.0),
+                                        #          "allegro_hand_kusuri_finger_finger_joint_9": (-2.0, 2.0),
+                                        #          "allegro_hand_kusuri_finger_finger_joint_10": (-2.0, 2.0),
+                                        #          "allegro_hand_kusuri_finger_finger_joint_11": (-2.0, 2.0),
+                                        #          "allegro_hand_oya_finger_joint_12": (-2.0, 2.0),
+                                        #          "allegro_hand_oya_finger_joint_13": (-2.0, 2.0),
+                                        #          "allegro_hand_oya_finger_joint_14": (-2.0, 2.0),
+                                        #          "allegro_hand_oya_finger_joint_15": (-2.0, 2.0)}
+                                           clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-5.0, 5.0),
+                                                 "allegro_hand_hitosashi_finger_finger_joint_1": (-5.0, 5.0),
+                                                 "allegro_hand_hitosashi_finger_finger_joint_2": (-5.0, 5.0),
+                                                 "allegro_hand_hitosashi_finger_finger_joint_3": (-5.0, 5.0),
+                                                 "allegro_hand_naka_finger_finger_joint_4": (-5.0, 5.0),
+                                                 "allegro_hand_naka_finger_finger_joint_5": (-5.0, 5.0),
+                                                 "allegro_hand_naka_finger_finger_joint_6": (-5.0, 5.0),
+                                                 "allegro_hand_naka_finger_finger_joint_7": (-5.0, 5.0),
+                                                 "allegro_hand_kusuri_finger_finger_joint_8": (-5.0, 5.0),
+                                                 "allegro_hand_kusuri_finger_finger_joint_9": (-5.0, 5.0),
+                                                 "allegro_hand_kusuri_finger_finger_joint_10": (-5.0, 5.0),
+                                                 "allegro_hand_kusuri_finger_finger_joint_11": (-5.0, 5.0),
+                                                 "allegro_hand_oya_finger_joint_12": (-5.0, 5.0),
+                                                 "allegro_hand_oya_finger_joint_13": (-5.0, 5.0),
+                                                 "allegro_hand_oya_finger_joint_14": (-5.0, 5.0),
+                                                 "allegro_hand_oya_finger_joint_15": (-5.0, 5.0)}
+                                        
     )
     
     
@@ -498,7 +515,6 @@ def screwdriver_signed_yaw_velocity_reward(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
     *,
     degrees: bool = False,
-    gain: float = 1.0,
     vmax: float | None = None,
 ) -> torch.Tensor:
     """Reward negative (clockwise) yaw velocity, penalize positive (counter-clockwise).
@@ -510,16 +526,15 @@ def screwdriver_signed_yaw_velocity_reward(
     asset: RigidObject = env.scene[asset_cfg.name]
     
     yaw_vel = screwdriver_yaw_velocity(env, asset_cfg=asset_cfg, degrees=degrees).squeeze(-1)
-    if vmax is not None:
-        yaw_vel = torch.clamp(yaw_vel, -vmax, vmax)
-    
-    # Reward = gain * (-yaw_vel)
-    # When yaw_vel is negative (clockwise), reward is positive
-    # When yaw_vel is positive (counter-clockwise), reward is negative (penalty)
-    base = -gain * yaw_vel
+    # Normalize and clip instead of using an explicit gain
+    if vmax is not None and vmax > 0:
+        norm = yaw_vel / vmax
+    else:
+        norm = yaw_vel
+    base = -torch.clamp(norm, -1.0, 1.0)
     # Gate by curriculum stage: Stage 0 = off; Stage 1+ = on
-    stage = _get_curriculum_stage(env)
-    return base * (stage >= 1).float()
+    stage = 1#_get_curriculum_stage(env)
+    return base
 
 
 def screwdriver_yaw_velocity(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"), degrees: bool = False) -> torch.Tensor:
@@ -607,7 +622,7 @@ def screwdriver_stability_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityC
     vel_xy = ang_vel_local[:, :2]
     if degrees:
         vel_xy = vel_xy * (180.0 / math.pi)
-    return torch.exp(-torch.sum(vel_xy * vel_xy, dim=1))
+    return -torch.sum(vel_xy * vel_xy, dim=1)
 
 
 # Effort and energy penalties
@@ -622,10 +637,8 @@ def torque_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEnti
         joint_ids, _ = asset.find_joints(joint_names, preserve_order=True)
     tau = asset.data.applied_torque[:, joint_ids]
     base = -weight * torch.sum(tau * tau, dim=1)
-    # Stage-gated scaling: small penalty in Stage 0, full in Stage 1+
-    stage = _get_curriculum_stage(env)
-    w = torch.where(stage == 0, torch.full_like(base, 0.25), torch.full_like(base, 1.0))
-    return w * base
+    # Curriculum-independent: no stage gating
+    return base
 
 def energy_penalty_abs(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
                        joint_names: list[str] | None = None, scale: float = 5e-2) -> torch.Tensor:
@@ -643,10 +656,8 @@ def energy_penalty_abs(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Scene
     power_abs = torch.sum(torch.abs(tau * qd), dim=1)  # |W|
     dt = env.physics_dt
     base = -scale * power_abs * dt
-    # Stage-gated scaling: small penalty in Stage 0, full in Stage 1+
-    stage = _get_curriculum_stage(env)
-    w = torch.where(stage == 0, torch.full_like(base, 0.25), torch.full_like(base, 1.0))
-    return w * base
+    # Curriculum-independent: no stage gating
+    return base
 
 
 def finger_joint_deviation_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), degrees: bool = False) -> torch.Tensor:
@@ -655,7 +666,7 @@ def finger_joint_deviation_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntit
     Computes the L2 norm squared of joint deviations per env.
     - Units: rad^2 by default; set ``degrees=True`` for deg^2.
     """
-    stage = _get_curriculum_stage(env)
+    stage = 1#_get_curriculum_stage(env)
     
     asset: Articulation = env.scene[asset_cfg.name]
     
@@ -677,9 +688,9 @@ def finger_joint_deviation_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntit
     
     deviation_penalty = joint_deviation
     
-    mask = (stage >= 1).float()
+    #mask = (stage >= 1).float()
     # Do I need the exp?
-    return -deviation_penalty * mask
+    return -deviation_penalty 
 
 # Should probably not be using this
 # UPDATE: I DO NOT USE THIS ANYMORE
@@ -848,12 +859,19 @@ def log_training_progress(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) 
     avg_rot_vel = torch.mean(torch.abs(yaw_vel)).item()  # Average absolute rotational velocity
     max_rot_vel = torch.max(torch.abs(yaw_vel)).item()   # Maximum absolute rotational velocity
     
-    # Log progress every 100 resets
+    # Always print average upright percentage on reset (across all envs)
+    asset_all: RigidObject = env.scene[SceneEntityCfg("screwdriver").name]
+    rot_matrix_all = matrix_from_quat(asset_all.data.root_quat_w)
+    cos_theta_all = torch.clamp(rot_matrix_all[:, :, 2][:, 2], -1.0, 1.0)
+    threshold_cos = math.cos(math.radians(19.0))
+    upright_percent = float((cos_theta_all >= threshold_cos).float().mean().item() * 100.0)
+    print(f"[UPRIGHT] Upright={upright_percent:.1f}%")
+    
+    # Retain periodic detailed log
     if hasattr(log_training_progress, 'call_count'):
         log_training_progress.call_count += 1
     else:
         log_training_progress.call_count = 0
-    
     if log_training_progress.call_count % 100 == 0:
         print(f"[PROGRESS] Stage {CURRENT_CURRICULUM_STAGE}: Upright={avg_upright:.3f}, Stability={avg_stability:.3f}, RotVel={avg_rot_vel:.3f} (max={max_rot_vel:.3f})")
 
@@ -1064,6 +1082,22 @@ class ContactObservationCfg:
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
+    
+def randomize_screwdriver_mass(env, env_ids=None, asset_cfg=SceneEntityCfg("screwdriver"),
+                               mass_range=(0.05, 0.20)):
+    stage = get_current_stage()
+    screwdriver = env.scene[asset_cfg.name]
+    env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
+    for env_i in env_indices:
+        prim_path = screwdriver.root_physx_view.prim_paths[env_i]
+        prim = stage.GetPrimAtPath(prim_path)
+        mass_api = UsdPhysics.MassAPI.Apply(prim)
+        # sample mass per env (kg)
+        m = float(torch.empty(1, device=env.device).uniform_(mass_range[0], mass_range[1]).cpu())
+        mass_attr = mass_api.GetMassAttr()
+        if not mass_attr:
+            mass_attr = mass_api.CreateMassAttr()
+        mass_attr.Set(m)
 
 
 @configclass
@@ -1151,8 +1185,14 @@ class EventCfg:
         interval_range_s=(0.2, 0.2),  # Log every 0.2s
     )
 
+    # randomize_screwdriver_mass_event = EventTerm(
+    #     func=randomize_screwdriver_mass,
+    #     mode="reset",
+    #     params={"asset_cfg": SceneEntityCfg("screwdriver"), "mass_range": (0.05, 0.20)},
+    # )
 
-    
+
+
 
 
 # Curriculum weights are now handled by per-env masking in reward functionss
@@ -1168,10 +1208,10 @@ class RewardsCfg:
     # I'm not sure if I wnat the terminating and alive rewards; the paper does not mention them
     
     # (1) Constant running reward (keep small so it doesn't dominate)
-    alive = RewTerm(func=mdp.is_alive, weight=0.1)
+    # alive = RewTerm(func=mdp.is_alive, weight=0.1)
     
     # (2) Failure penalty (comparable scale with other terms)
-    terminating = RewTerm(func=mdp.is_terminated, weight=0.0)
+    # terminating = RewTerm(func=mdp.is_terminated, weight=0.0)
     
     ## Penalizes deviation from upright; paper only punishes unwanted angular velocitioes
     # screwdriver_upright = RewTerm(
@@ -1183,12 +1223,11 @@ class RewardsCfg:
     # (4) Rotation velocity reward - partial reward for positive rotation
     screwdriver_rotation = RewTerm(
         func=screwdriver_signed_yaw_velocity_reward,
-        # Map yaw velocity roughly to [-1, 1] via gain and vmax
+        # Map yaw velocity to [-1, 1] via clipping with vmax
         weight=3.0,
         params={
             "asset_cfg": SceneEntityCfg("screwdriver"),
-            "gain": 0.1,     # if vmax=10 rad/s -> gain * vmax ≈ 1
-            "vmax": 10.0,    # clamp to avoid outliers
+            "vmax": 4.0,    # normalize & clip to [-1,1]
         },
     )
     
@@ -1196,7 +1235,7 @@ class RewardsCfg:
     screwdriver_stability = RewTerm(
         func=screwdriver_stability_reward,
         # stability reward returns exp(-||w_xy||^2) ∈ (0, 1], keep weight ~1
-        weight=1.0,
+        weight=0.8,
         params={"asset_cfg": SceneEntityCfg("screwdriver")},
     )
 
@@ -1205,7 +1244,7 @@ class RewardsCfg:
     # (6) Finger joint deviation penalty to encourage finger gaiting (masked by stage)
     finger_deviation_penalty = RewTerm(
         func=finger_joint_deviation_penalty,
-        weight=0.3,  # Small penalty to encourage movement without overwhelming other rewards
+        weight=3.0,  # Small penalty to encourage movement without overwhelming other rewards
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
             "allegro_hand_hitosashi_finger_finger_joint_0",
             "allegro_hand_hitosashi_finger_finger_joint_1",
@@ -1229,12 +1268,12 @@ class RewardsCfg:
     # (7) Effort and energy regularization
     torque_mag_penalty = RewTerm(
         func=torque_penalty,
-        weight=1.0,
+        weight=0.3,
         params={"asset_cfg": SceneEntityCfg("robot"), "joint_names": None, "weight": 1e-3},
     )
     energy_penalty = RewTerm(
         func=energy_penalty_abs,
-        weight=1.0,
+        weight=10.0,
         params={"asset_cfg": SceneEntityCfg("robot"), "joint_names": None, "scale": 5e-4},
     )
 

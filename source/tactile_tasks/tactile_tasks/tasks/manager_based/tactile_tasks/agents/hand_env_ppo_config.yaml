@@ -3,7 +3,8 @@ params:
 
   # Environment wrapper clipping
   env:
-    clip_observations: 5.0
+    # clip_observations: 5.0
+    frame_stack: 3
     clip_actions: 2.0  # Match your joint action clipping
 
   # Algorithm configuration
@@ -27,8 +28,8 @@ params:
           name: default
         sigma_init:
           name: const_initializer
-          val: 0.035 # used to be 0
-        fixed_sigma: True # used to be True 
+          val: -1 # 0.0035 # used to be 0.0035
+        fixed_sigma: False # used to be True 
     mlp:
       # Larger network for complex hand manipulation
       units: [512, 512, 256, 128]
@@ -68,17 +69,17 @@ params:
     # PPO hyperparameters optimized for hand manipulation
     gamma: 0.995  # Higher discount for longer-term rewards
     tau: 0.95     # GAE parameter
-    learning_rate: 1e-4  # Lowered for stability
+    learning_rate: 1e-5  # Lowered for stability
     lr_schedule: adaptive
     kl_threshold: 0.008
-    score_to_win: 50000  # Higher target for complex task
+    score_to_win: 100000  # Higher target for complex task
     
     # Standard deviation bounds to prevent negative std
     min_std: 0.01
     max_std: 1.0
     
     # Training schedule
-    max_epochs: 500
+    max_epochs: 2500
     save_best_after: 100
     save_frequency: 50
     
@@ -91,17 +92,17 @@ params:
     # Experience collection - optimized for RTX 4070 Ti
     horizon_length: 256  # Longer horizon for complex manipulation
     minibatch_size: 4096  # Larger batch size to utilize 12GB VRAM
-    mini_epochs: 10  # More epochs per update
+    mini_epochs: 5  # More epochs per update
     
     # Value function settings
-    critic_coef: 2.0  # Lower critic weight for hand manipulation
+    critic_coef: 1.0  # Lower critic weight for hand manipulation
     clip_value: True
     
     # Sequence length for recurrent components
     seq_length: 4
     
     # Bounds loss for action constraints
-    bounds_loss_coef: 0.001  # Higher penalty for action bounds
+    bounds_loss_coef: 0.005  # Higher penalty for action bounds
     
     # Additional PPO settings for hand manipulation
     value_bootstrap: True
@@ -140,6 +141,6 @@ params:
     # Environment specific settings
     env_config:
       num_envs: 256  # Default, will be overridden by script
-      episode_length: 1800  # 5 seconds at 120Hz with decimation=2
+      episode_length: 2400  # 5 seconds at 120Hz with decimation=2
       sim_dt: 0.008333  # 1/120
       decimation: 2
