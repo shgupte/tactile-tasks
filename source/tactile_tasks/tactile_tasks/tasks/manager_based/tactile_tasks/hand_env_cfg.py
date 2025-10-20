@@ -1268,7 +1268,7 @@ class RewardsCfg:
     # (7) Effort and energy regularization
     torque_mag_penalty = RewTerm(
         func=torque_penalty,
-        weight=0.3,
+        weight=0.03,
         params={"asset_cfg": SceneEntityCfg("robot"), "joint_names": None, "weight": 1e-3},
     )
     energy_penalty = RewTerm(
