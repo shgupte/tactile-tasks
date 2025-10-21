@@ -263,7 +263,7 @@ class ActionsCfg:
                                                 "allegro_hand_oya_finger_joint_13",
                                                 "allegro_hand_oya_finger_joint_14",
                                                 "allegro_hand_oya_finger_joint_15"],
-                                           scale=1.0,  # Reduced from 1.0 for stability
+                                           scale=0.5,  # Reduced from 1.0 for stability
                                            preserve_order=True,
                                         #    clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-2.0, 2.0),
                                         #          "allegro_hand_hitosashi_finger_finger_joint_1": (-2.0, 2.0),
@@ -1224,7 +1224,7 @@ class RewardsCfg:
     screwdriver_rotation = RewTerm(
         func=screwdriver_signed_yaw_velocity_reward,
         # Map yaw velocity to [-1, 1] via clipping with vmax
-        weight=3.0,
+        weight=6.0,
         params={
             "asset_cfg": SceneEntityCfg("screwdriver"),
             "vmax": 4.0,    # normalize & clip to [-1,1]
@@ -1235,7 +1235,7 @@ class RewardsCfg:
     screwdriver_stability = RewTerm(
         func=screwdriver_stability_reward,
         # stability reward returns exp(-||w_xy||^2) ∈ (0, 1], keep weight ~1
-        weight=0.8,
+        weight=1.0,
         params={"asset_cfg": SceneEntityCfg("screwdriver")},
     )
 
@@ -1244,7 +1244,7 @@ class RewardsCfg:
     # (6) Finger joint deviation penalty to encourage finger gaiting (masked by stage)
     finger_deviation_penalty = RewTerm(
         func=finger_joint_deviation_penalty,
-        weight=3.0,  # Small penalty to encourage movement without overwhelming other rewards
+        weight=1.0,  # Small penalty to encourage movement without overwhelming other rewards
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
             "allegro_hand_hitosashi_finger_finger_joint_0",
             "allegro_hand_hitosashi_finger_finger_joint_1",
