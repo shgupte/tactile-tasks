@@ -1,0 +1,1 @@
+{"handle_radius": 0.024394093728079082, "handle_height": 0.1, "shaft_radius": 0.005, "shaft_height": 0.1, "total_height": 0.2, "center_height": 0.15000000000000002}

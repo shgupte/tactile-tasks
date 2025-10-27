@@ -27,6 +27,8 @@ import isaaclab.envs.mdp as mdp
 from isaaclab.utils.math import quat_apply, matrix_from_quat
 from typing import TYPE_CHECKING
 from isaaclab.sensors import ContactSensorCfg
+import os
+import glob
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -39,6 +41,8 @@ from .screwdriver import ScrewdriverCfg
 class AllegroSceneCfg(InteractiveSceneCfg):
     """Configuration for testing the screwdriver scene."""
 
+    # Allow per-environment USD differences so we can swap geometry references
+    replicate_physics = False
     # ground plane
     ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
 
@@ -180,8 +184,15 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
         joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
                 
         physx_joint_api = PhysxSchema.PhysxJointAPI.Apply(joint_prim)
-        # I wanted to add some joint friction but IsaacSim was not happy about it
-        physx_joint_api.CreateJointFrictionAttr().Set(0.0)
+        # Use an angular drive with damping to emulate joint friction (supported for non-articulation joints).
+        drive = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
+        drive.CreateStiffnessAttr().Set(0.0)   # no spring target
+        # Randomize viscous damping per-env using a clipped normal around 0.10 N·m·s/rad
+        mu, sigma = 0.10, 0.05
+        damping = float(torch.randn(()).mul(sigma).add(mu).clamp(0.02, 0.30))
+        drive.CreateDampingAttr().Set(damping)
+        # Cap opposing torque to avoid saturation at typical speeds (tunable)
+        drive.CreateMaxForceAttr().Set(2.0)
 
         
         # print(f"Env {env_i}: Applied PhysX joint API with minimal friction")
@@ -282,12 +293,16 @@ def add_screwdriver_rotation_markers(env, env_ids, asset_cfg: SceneEntityCfg = S
 
     # Choose a small offset from the local origin so that the marker traces a circle when rotating.
     # Adjust if your screwdriver geometry needs a different radius.
-    marker_local_offset = Gf.Vec3f(0.02, 0.0, 0.0)
+    marker_local_offset = Gf.Vec3f(0.04, 0.0, -0.1)
     marker_radius = 0.004
 
     env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
     for env_i in env_indices:
         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
+        # Ensure we can author children under the screwdriver prim
+        screw_prim = stage.GetPrimAtPath(screwdriver_prim_path)
+        if screw_prim.IsInstanceable():
+            screw_prim.SetInstanceable(False)
         marker_prim_path = f"{screwdriver_prim_path}/RotationMarker"
 
         marker_prim = stage.GetPrimAtPath(marker_prim_path)
@@ -325,6 +340,52 @@ def add_screwdriver_rotation_markers(env, env_ids, asset_cfg: SceneEntityCfg = S
             if translate_op is None:
                 translate_op = xformable.AddTranslateOp()
             translate_op.Set(marker_local_offset)
+
+
+def _discover_random_screwdriver_usds() -> list[str]:
+    """Return all screwdriver USDs from the attached random set on disk.
+
+    Searches: .../usd_files/object/random_screwdrivers/**/screwdriver.usd
+    """
+    base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/sd_root/usd_files/object"
+    pattern = os.path.join(base_dir, "random_screwdrivers", "**", "screwdriver.usd")
+    return sorted(glob.glob(pattern, recursive=True))
+
+
+def randomize_screwdriver_geometry_prestartup(
+    env,
+    env_ids,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
+    usd_paths: list[str] | None = None,
+) -> None:
+    """Swap each env's screwdriver USD reference before play starts (root-level properties persist).
+
+    Operates on USD references only (safe at prestartup). Requires replicate_physics == False.
+    """
+    stage = get_current_stage()
+    asset = env.scene[asset_cfg.name]
+    # Resolve per-env prims from regex prim path
+    prim_paths = sim_utils.find_matching_prim_paths(asset.cfg.prim_path)
+
+    if not usd_paths:
+        usd_paths = _discover_random_screwdriver_usds()
+    if not usd_paths:
+        return
+
+    env_indices = list(range(len(prim_paths))) if env_ids is None else env_ids.tolist()
+    with Sdf.ChangeBlock():
+        for env_i in env_indices:
+            prim_path = prim_paths[env_i]
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                continue
+            if prim.IsInstanceable():
+                prim.SetInstanceable(False)
+            refs = prim.GetReferences()
+            choice_idx = (env_i * 131 + (env.cfg.seed or 0)) % len(usd_paths)
+            usd_path = usd_paths[choice_idx]
+            refs.ClearReferences()
+            refs.AddReference(usd_path)
 
 @configclass
 class ActionsCfg:
@@ -460,41 +521,6 @@ def init_curriculum_stage(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) 
     else:
         stage[env_ids] = 0
 
-#------------------Ignore, since we will be using velocity reward instead------------------
-
-# def _get_initial_screwdriver_quat(env: ManagerBasedRLEnv) -> torch.Tensor:
-#     """Return per-env initial screwdriver quaternion tensor (wxyz), creating it if missing."""
-#     if not hasattr(env, "screwdriver_init_quat_w"):
-#         asset: RigidObject = env.scene["screwdriver"]
-#         env.screwdriver_init_quat_w = asset.data.root_quat_w.clone()
-#     return env.screwdriver_init_quat_w
-
-
-
-# def _get_cumulative_rotation(env: ManagerBasedRLEnv) -> torch.Tensor:
-#     """Get or create the per-env cumulative positive rotation tensor."""
-#     if not hasattr(env, 'cumulative_positive_rotation'):
-#         env.cumulative_positive_rotation = torch.zeros(env.num_envs, device=env.device)
-#     return env.cumulative_positive_rotation
-
-
-# def init_initial_screwdriver_orientation(env: ManagerBasedRLEnv, env_ids: torch.Tensor, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> None:
-#     """Capture current screwdriver orientation as the per-env initial orientation (at reset)."""
-#     asset: RigidObject = env.scene[asset_cfg.name]
-#     init_quat = _get_initial_screwdriver_quat(env)
-#     init_quat[env_ids] = asset.data.root_quat_w[env_ids]
-    
-#     # Also reset cumulative rotation for these environments
-#     cumulative_rot = _get_cumulative_rotation(env)
-#     cumulative_rot[env_ids] = 0.0
-
-
-# def reset_cumulative_rotation(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
-#     """Reset cumulative rotation for specified environments."""
-#     cumulative_rot = _get_cumulative_rotation(env)
-#     cumulative_rot[env_ids] = 0.0
-
-# ------------------Ignore, since we will be using velocity reward instead------------------
 
 
 def screwdriver_upright_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
@@ -562,41 +588,6 @@ def screwdriver_tilt_exceeds(
     threshold_cos = math.cos(math.radians(threshold_deg))
     return cos_theta < threshold_cos
 
-# ------------------Ignore, since we will be using velocity reward instead------------------
-# def screwdriver_rotation_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
-#     """Reward for cumulative positive rotation around the screwdriver's z-axis."""
-#     asset: RigidObject = env.scene[asset_cfg.name]
-    
-#     # Get angular velocity in the screwdriver's local frame
-#     ang_vel_w = asset.data.root_ang_vel_w
-#     quat = asset.data.root_quat_w
-#     rot_matrix = matrix_from_quat(quat)
-#     ang_vel_local = torch.bmm(rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)).squeeze(-1)
-    
-#     # Z-axis velocity (yaw) is what we care about
-#     yaw_vel = ang_vel_local[:, 2]
-    
-#     # Get time step (assuming dt is available)
-#     dt = env.physics_dt
-    
-#     # Update cumulative rotation with only positive contributions
-#     cumulative_rot = _get_cumulative_rotation(env)
-#     positive_rotation = torch.clamp(yaw_vel * dt, min=0.0)  # Only positive rotation
-#     cumulative_rot += positive_rotation
-    
-#     # Reward based on cumulative rotation with diminishing returns
-#     # Use a logarithmic scale so early rotation gets good rewards, but it doesn't explode
-#     rotation_reward = torch.log(1.0 + cumulative_rot * 10.0)  # Scale factor of 10.0
-    
-#     # Normalize to reasonable range (0 to ~2.3 for 1 radian of rotation)
-#     rotation_reward = torch.clamp(rotation_reward, max=2.3)
-    
-#     stage = _get_curriculum_stage(env)
-#     # Active during stages 1-2; stage 3 uses signed velocity reward instead
-#     mask = ((stage == 1) | (stage == 2)).float()
-#     return rotation_reward * mask
-# ------------------Ignore, since we will be using velocity reward instead------------------
-
 def screwdriver_signed_yaw_velocity_reward(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
@@ -652,48 +643,7 @@ def screwdriver_yaw_delta(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Sc
     return yaw_vel * dt
 
 
-# ------------------Ignore, since we will be using velocity reward instead------------------
-# def _relative_yaw(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-#     """Compute relative yaw (radians) of screwdriver from its initial orientation."""
-#     asset: RigidObject = env.scene[asset_cfg.name]
-#     cur_q = asset.data.root_quat_w  # (N, 4)
-#     init_q = _get_initial_screwdriver_quat(env)  # (N, 4)
-#     cur_R = matrix_from_quat(cur_q)      # (N, 3, 3)
-#     init_R = matrix_from_quat(init_q)    # (N, 3, 3)
-#     R_rel = torch.bmm(init_R.transpose(-2, -1), cur_R)
-#     rel_r00 = R_rel[:, 0, 0]
-#     rel_r10 = R_rel[:, 1, 0]
-#     return torch.atan2(rel_r10, rel_r00)
-# ------------------Ignore, since we will be using velocity reward instead------------------
 
-# ------------------Ignore, since we will be using velocity reward instead------------------            
-# def _angle_target_reward(yaw_rel: torch.Tensor, target_rad: float, sharpness: float = 4.0) -> torch.Tensor:
-#     """Return exp(-k * angle_error^2) with angle wraparound."""
-#     error = torch.abs(yaw_rel - target_rad)
-#     error = torch.remainder(error + math.pi, 2 * math.pi) - math.pi
-#     return torch.exp(-sharpness * (error ** 2))
-
-
-# def screwdriver_reach_30deg_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
-#     yaw_rel = _relative_yaw(env, asset_cfg)
-#     reward = _angle_target_reward(yaw_rel, math.radians(30.0), sharpness=6.0)
-#     stage = _get_curriculum_stage(env)
-#     return reward * (stage == 1).float()
-
-
-# def screwdriver_reach_60deg_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
-#     yaw_rel = _relative_yaw(env, asset_cfg)
-#     reward = _angle_target_reward(yaw_rel, math.radians(60.0), sharpness=6.0)
-#     stage = _get_curriculum_stage(env)
-#     return reward * (stage == 2).float()
-
-
-# def screwdriver_reach_90deg_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
-#     yaw_rel = _relative_yaw(env, asset_cfg)
-#     reward = _angle_target_reward(yaw_rel, math.radians(90.0), sharpness=6.0)
-#     stage = _get_curriculum_stage(env)
-#     return reward * (stage == 3).float()
-# ------------------Ignore, since we will be using velocity reward instead------------------
 
 def screwdriver_stability_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"), degrees: bool = False) -> torch.Tensor:
     """L2 norm squared of local x/y angular velocity.
@@ -827,46 +777,7 @@ def curriculum_weighted_reward(env: ManagerBasedRLEnv) -> torch.Tensor:
     return total_reward
 
 
-# def screwdriver_fell_over(env: ManagerBasedRLEnv, threshold_angle: float = 30.0, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
-#     """Terminate per-env if screwdriver falls over beyond its per-env threshold angle."""
-#     asset: RigidObject = env.scene[asset_cfg.name]
-#     # Get rotation matrix from quaternion
-#     quat = asset.data.root_quat_w
-#     rot_matrix = matrix_from_quat(quat)
-#     # Extract z-axis (third column of rotation matrix)
-#     z_axis = rot_matrix[:, :, 2]  # Shape: (num_envs, 3)
-#     # Check angle with world z-axis
-#     z_component = z_axis[:, 2]  # Dot product with [0, 0, 1]
-    
-#     # Per-env thresholds from curriculum (degrees) -> cos
-#     # per_env_thresh_deg = curriculum_termination_threshold(env)  # (num_envs,)
-#     per_env_thresh_cos = torch.cos(torch.deg2rad(per_env_thresh_deg))
-#     # Terminate per env
-#     fell_over = z_component < per_env_thresh_cos
-#     return fell_over
 
-# #------------------Ignore, since we will be using velocity reward instead------------------
-# def curriculum_rotation_target(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None, asset_cfg: SceneEntityCfg = None) -> torch.Tensor:
-#     """Per-env target rotation velocity based on curriculum stage.
-
-#     All stages use 0.0 now (no velocity target in final stage).
-#     """
-#     stage = _get_curriculum_stage(env)
-#     target = torch.zeros_like(stage, dtype=torch.float32)
-#     return target.to(env.device)
-
-# #------------------Ignore, since we will be using velocity reward instead------------------
-# def curriculum_termination_threshold(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None, asset_cfg: SceneEntityCfg = None) -> torch.Tensor:
-#     """Per-env termination threshold based on curriculum stage (degrees)."""
-#     stage = _get_curriculum_stage(env)
-#     th = torch.where(
-#         stage == 0,
-#         torch.full_like(stage, 45, dtype=torch.float32),
-#         torch.full_like(stage, 30, dtype=torch.float32)
-#     )
-#     return th.to(env.device)
-
-# #------------------Ignore, since we will be using velocity reward instead------------------
 def curriculum_reward_weights(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) -> torch.Tensor:
     """Curriculum function that adjusts reward weights based on performance."""
     global CURRENT_CURRICULUM_STAGE
@@ -969,36 +880,7 @@ def reset_curriculum_stage(env: ManagerBasedRLEnv, stage: int = 0) -> None:
     CURRENT_CURRICULUM_STAGE = stage
     # print(f"🔄 CURRICULUM RESET: Stage {stage}")
 
-# #------------------Ignore, since we will be using velocity reward instead------------------
-# def screwdriver_reached_target_angle(env: ManagerBasedRLEnv, tol_deg: float = 5.0, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
-#     """Per-env success termination when current stage's target angle is reached.
 
-#     Stages:
-#       - 1 → 30° target
-#       - 2 → 60° target
-#       - 3 → 90° target
-#     Stage 0 never triggers success.
-#     """
-#     stage = _get_curriculum_stage(env)
-#     yaw_rel = _relative_yaw(env, asset_cfg)  # radians
-
-#     # Compute per-env target angle in radians; stage 3 has no angle target (velocity-focused)
-#     target_deg = torch.zeros_like(stage, dtype=torch.float32)
-#     target_deg = torch.where(stage == 1, torch.full_like(target_deg, 30.0), target_deg)
-#     target_deg = torch.where(stage == 2, torch.full_like(target_deg, 60.0), target_deg)
-#     target_rad = torch.deg2rad(target_deg)
-
-#     # Angle error with wrap to [-pi, pi]
-#     error = torch.abs(yaw_rel - target_rad)
-#     error = torch.remainder(error + math.pi, 2 * math.pi) - math.pi
-#     tol_rad = math.radians(tol_deg)
-
-#     # Only allow angle-based success for stages 1..2
-#     active = (stage == 1) | (stage == 2)
-#     reached = (error <= tol_rad) & active
-#     return reached
-
-# #------------------Ignore, since we will be using velocity reward instead------------------
 
 def log_contact_sensor_sample(env, env_ids=None) -> None:
         # Access the sensor by its config name ("contact_forces" in AllegroSceneCfg)
@@ -1227,6 +1109,27 @@ class EventCfg:
     #     params = {"static_friction" : 10.0, "dynamic_friction" : 10.0, "restitution" : 0.0}
     # )
     
+    # Prestartup: per-env geometry selection (safe USD edits before play)
+    randomize_screwdriver_usd = EventTerm(
+        func=randomize_screwdriver_geometry_prestartup,
+        mode="prestartup",
+        params={"asset_cfg": SceneEntityCfg("screwdriver")},
+    )
+
+    # Prestartup: randomize physics material friction for screwdriver colliders
+    randomize_screwdriver_friction = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("screwdriver"),
+            "static_friction_range": (0.4, 1.2),
+            "dynamic_friction_range": (0.3, 1.0),
+            "restitution_range": (0.0, 0.05),
+            "num_buckets": 8,
+            "make_consistent": True,
+        },
+    )
+
     # Reset screwdriver positions (this adds env_origins offset)
     reset_screwdriver_pose = EventTerm(
         func=mdp.reset_root_state_uniform,
@@ -1248,6 +1151,13 @@ class EventCfg:
     create_rotation_markers = EventTerm(
         func=add_screwdriver_rotation_markers,
         mode="reset",
+        params={"asset_cfg": SceneEntityCfg("screwdriver")},
+    )
+
+    # Ensure markers are visible immediately at startup (not only after first reset)
+    create_rotation_markers_startup = EventTerm(
+        func=add_screwdriver_rotation_markers,
+        mode="startup",
         params={"asset_cfg": SceneEntityCfg("screwdriver")},
     )
     

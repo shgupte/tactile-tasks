@@ -1,5 +1,5 @@
 params:
-  seed: 42
+  seed: 67
 
   # Environment wrapper clipping
   env:
@@ -61,7 +61,7 @@ params:
     
     # Reward shaping
     reward_shaper:
-      scale_value: 0.1
+      scale_value: 0.5
     
     # Advantage normalization
     normalize_advantage: True
@@ -70,8 +70,9 @@ params:
     gamma: 0.995  # Higher discount for longer-term rewards
     tau: 0.95     # GAE parameter
     learning_rate: 1e-4  # Lowered for stability
+    learning_rate: 1e-4  # Lowered for stability
     lr_schedule: adaptive
-    kl_threshold: 0.008
+    kl_threshold: 0.03
     score_to_win: 100000  # Higher target for complex task
     
     # Standard deviation bounds to prevent negative std

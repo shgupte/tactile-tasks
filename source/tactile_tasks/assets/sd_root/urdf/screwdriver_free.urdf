@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!-- this is the one without any virtual joints and links -->
+<robot name="screwdriver_on_the_table">
+<link name="screwdriver_stick">
+    <inertial>
+      <mass value="0.05"/>
+      <!-- <friction value="1.0"/> -->
+      <inertia ixx="0.000041979" ixy="0.0" ixz="0.0" iyy="0.000041979" iyz="0.0" izz="0.000000625"/>
+    </inertial>
+    <visual>
+        <origin rpy="0 0 0" xyz="0 0 0.05"/>
+        <geometry>
+            <cylinder radius="0.005" length="0.1"/>
+        </geometry>
+        <!-- <material name="White">
+	 	    <color rgba="0.9 0.9 0.9 0.5"/>
+        </material> -->
+    </visual>
+    <collision>
+        <origin rpy="0 0 0" xyz="0 0 0.05"/>
+        <geometry>
+            <cylinder radius="0.005" length="0.1"/>
+        </geometry>
+    </collision>
+</link>
+
+<gazebo reference="screwdriver_body">
+    <mu1>10.0</mu1>
+    <mu2>10.0</mu2>
+    <!-- Isaac Sim maps mu1/mu2 to PhysX static/dynamic friction during URDF→USD import -->
+</gazebo>
+
+<joint name="screwdriver_stick_body_joint" type="fixed">
+    <parent link="screwdriver_stick"/>
+    <child link="screwdriver_body"/>
+    <origin rpy="0 0 0" xyz="0 0 0.1"/> 
+    <axis xyz="0 0 1"/>
+</joint>
+
+<link name="screwdriver_body">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.00009667" ixy="0.0" ixz="0.0" iyy="0.00009667" iyz="0.0" izz="0.000006"/>
+    </inertial>
+    <visual>
+        <origin rpy="0 0 0" xyz="0 0 0.05"/>
+        <geometry>
+            <cylinder radius="0.02" length="0.1"/>
+        </geometry>
+        <!-- <material name="Red1">
+	 	    <color rgba="0.9 0. 0. 0.5"/>
+        </material> -->
+    </visual>
+    <collision>
+        <origin rpy="0 0 0" xyz="0 0 0.05"/>
+        <geometry>
+            <cylinder radius="0.02" length="0.1"/>
+        </geometry>
+    </collision>
+</link>
+
+<!-- <joint name="screwdriver_body_cap_joint" type="revolute">
+    <parent link="screwdriver_body"/>
+    <child link="screwdriver_cap"/>
+    <origin rpy="0 0 0" xyz="0 0 0.1"/> 
+    <axis xyz="0 0 1"/>
+</joint>
+
+<link name="screwdriver_cap">
+    <inertial>
+      <mass value="0.005"/>
+      <inertia ixx="0.00001" ixy="0.0" ixz="0.0" iyy="0.000005" iyz="0.0" izz="0.000005"/>
+    </inertial>
+    <visual>
+        <origin rpy="0 0 0" xyz="0 0 0.0006"/>
+        <geometry>
+            <cylinder radius="0.02" length="0.001"/>
+        </geometry>
+        <material name="Yellow">
+	 	    <color rgba="0.9 0.9 0. 1.0"/>
+        </material>
+    </visual>
+    <collision>
+        <origin rpy="0 0 0" xyz="0 0 0.0005"/>
+        <geometry>
+            <cylinder radius="0.02" length="0.001"/>
+        </geometry>
+    </collision>
+</link> -->
+
+</robot>
