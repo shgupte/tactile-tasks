@@ -4,10 +4,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import math
-
+from omni.usd import get_context
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedEnv, ManagerBasedRLEnvCfg
+from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -15,6 +16,8 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import CurriculumTermCfg as CurriculumTerm
+from isaaclab.sim.utils import bind_physics_material
+
 from isaaclab.scene import InteractiveSceneCfg, InteractiveScene
 from isaacsim.core.utils.stage import get_current_stage
 from isaaclab.utils import configclass
@@ -28,7 +31,7 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 from .arm_allegro import AllegroCfg
-from .screwdriver import ScrewdriverCfg, apply_screwdriver_friction
+from .screwdriver import ScrewdriverCfg
 
 # Scene definition
 # from hand_scene import AllegroSceneCfg
@@ -182,6 +185,90 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
 
         
         # print(f"Env {env_i}: Applied PhysX joint API with minimal friction")
+# def apply_screwdriver_friction(env, env_ids, static_friction, dynamic_friction, restitution):
+#     screwdriver = env.scene["screwdriver"]
+#     # Loop over per-env prim paths if you have multiple envs
+#     env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
+
+#     for env_i in env_indices:
+#         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
+#         material_path = f"{screwdriver_prim_path}/PhysicsMaterial"
+#         mat_cfg = RigidBodyMaterialCfg(
+#             static_friction=static_friction,
+#             dynamic_friction=dynamic_friction,
+#             restitution=restitution,
+#         )
+#         # Create the material prim
+#         mat_cfg.func(material_path, mat_cfg)
+#         # Bind to the screwdriver prim (applies to its colliders)
+#         bind_physics_material(screwdriver_prim_path, material_path)
+# def apply_screwdriver_friction(env, env_ids, static_friction, dynamic_friction, restitution):
+#     screwdriver = env.scene["screwdriver"]
+#     env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
+#     stage = get_context().get_stage()
+
+#     for env_i in env_indices:
+#         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
+#         material_path = f"{screwdriver_prim_path}/PhysicsMaterial"
+
+#         # Step 1: Uninstance all children so we can modify them
+#         screwdriver_prim = stage.GetPrimAtPath(screwdriver_prim_path)
+#         for child in screwdriver_prim.GetChildren():
+#             if child.IsInstance():
+#                 child.SetInstanceable(False)
+
+#         # Step 2: Create material
+#         mat_cfg = RigidBodyMaterialCfg(
+#             static_friction=static_friction,
+#             dynamic_friction=dynamic_friction,
+#             restitution=restitution,
+#         )
+
+#         # This is the correct way to create the prim on stage
+#         mat_cfg.func.to_prim(material_path)
+
+#         # Step 3: Bind the material
+#         success = bind_physics_material(screwdriver_prim_path, material_path)
+
+#         if not success:
+#             print(f"[Warning] Failed to bind material to {screwdriver_prim_path}")
+
+
+# from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
+# from isaaclab.sim.utils import bind_physics_material
+# from omni.usd import get_context
+# from pxr import Usd
+
+def recursively_uninstance_prim(prim):
+    if prim.IsInstance():
+        prim.SetInstanceable(False)
+    for child in prim.GetChildren():
+        recursively_uninstance_prim(child)
+
+def apply_screwdriver_friction(env, env_ids, static_friction, dynamic_friction, restitution):
+    screwdriver = env.scene["screwdriver"]
+    env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
+    stage = get_context().get_stage()
+
+    for env_i in env_indices:
+        screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
+        material_path = f"{screwdriver_prim_path}/PhysicsMaterial"
+
+        screwdriver_prim = stage.GetPrimAtPath(screwdriver_prim_path)
+        recursively_uninstance_prim(screwdriver_prim)
+
+        mat_cfg = RigidBodyMaterialCfg(
+            static_friction=static_friction,
+            dynamic_friction=dynamic_friction,
+            restitution=restitution,
+        )
+        mat_cfg.func(material_path, mat_cfg)
+
+
+        success = bind_physics_material(screwdriver_prim_path, material_path)
+        if not success:
+            pass
+
 
 def add_screwdriver_rotation_markers(env, env_ids, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> None:
     """Add a small red visual marker to each screwdriver to make rotation visible.
@@ -263,7 +350,7 @@ class ActionsCfg:
                                                 "allegro_hand_oya_finger_joint_13",
                                                 "allegro_hand_oya_finger_joint_14",
                                                 "allegro_hand_oya_finger_joint_15"],
-                                           scale=0.5,  # Reduced from 1.0 for stability
+                                           scale=1.0,  # Reduced from 1.0 for stability
                                            preserve_order=True,
                                         #    clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-2.0, 2.0),
                                         #          "allegro_hand_hitosashi_finger_finger_joint_1": (-2.0, 2.0),
@@ -527,11 +614,11 @@ def screwdriver_signed_yaw_velocity_reward(
     
     yaw_vel = screwdriver_yaw_velocity(env, asset_cfg=asset_cfg, degrees=degrees).squeeze(-1)
     # Normalize and clip instead of using an explicit gain
-    if vmax is not None and vmax > 0:
-        norm = yaw_vel / vmax
-    else:
-        norm = yaw_vel
-    base = -torch.clamp(norm, -1.0, 1.0)
+    # if vmax is not None and vmax > 0:
+    #     norm = yaw_vel / vmax
+    # else:
+    #     norm = yaw_vel
+    base = -torch.clamp(yaw_vel, -4.0, 4.0)
     # Gate by curriculum stage: Stage 0 = off; Stage 1+ = on
     stage = 1#_get_curriculum_stage(env)
     return base
@@ -826,15 +913,15 @@ def advance_curriculum_stage(env: ManagerBasedRLEnv, env_ids: torch.Tensor = Non
     stage_2_count = int((stage == 2).sum().item())
     stage_3_count = int((stage == 3).sum().item())
     
-    print(f"[CURRICULUM] Avg Stage: {avg_stage:.2f} | Stages: 0:{stage_0_count} 1:{stage_1_count} 2:{stage_2_count} 3:{stage_3_count}")
-    print(f"[CURRICULUM] Avg Rewards - Upright: {avg_upright:.3f}, Stability: {avg_stability:.3f}")
+    # print(f"[CURRICULUM] Avg Stage: {avg_stage:.2f} | Stages: 0:{stage_0_count} 1:{stage_1_count} 2:{stage_2_count} 3:{stage_3_count}")
+    # print(f"[CURRICULUM] Avg Rewards - Upright: {avg_upright:.3f}, Stability: {avg_stability:.3f}")
 
     # Conditions for promoting to Stage 1
     promote_0_to_1 = (stage == 0) & (upright_rew > 0.95) & (stability_rew > 0.9)
     if torch.any(promote_0_to_1):
         num = int(promote_0_to_1.sum().item())
         stage[promote_0_to_1] = 1
-        print(f"[CURRICULUM] Promoted {num} env(s) from Stage 0 → 1")
+        # print(f"[CURRICULUM] Promoted {num} env(s) from Stage 0 → 1")
 
 # DONT REALLY NEED THIS ANYMORE
 def log_training_progress(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) -> None:
@@ -865,7 +952,7 @@ def log_training_progress(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) 
     cos_theta_all = torch.clamp(rot_matrix_all[:, :, 2][:, 2], -1.0, 1.0)
     threshold_cos = math.cos(math.radians(19.0))
     upright_percent = float((cos_theta_all >= threshold_cos).float().mean().item() * 100.0)
-    print(f"[UPRIGHT] Upright={upright_percent:.1f}%")
+    # print(f"[UPRIGHT] Upright={upright_percent:.1f}%")
     
     # Retain periodic detailed log
     if hasattr(log_training_progress, 'call_count'):
@@ -873,14 +960,14 @@ def log_training_progress(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) 
     else:
         log_training_progress.call_count = 0
     if log_training_progress.call_count % 100 == 0:
-        print(f"[PROGRESS] Stage {CURRENT_CURRICULUM_STAGE}: Upright={avg_upright:.3f}, Stability={avg_stability:.3f}, RotVel={avg_rot_vel:.3f} (max={max_rot_vel:.3f})")
+        pass# print(f"[PROGRESS] Stage {CURRENT_CURRICULUM_STAGE}: Upright={avg_upright:.3f}, Stability={avg_stability:.3f}, RotVel={avg_rot_vel:.3f} (max={max_rot_vel:.3f})")
 
 
 def reset_curriculum_stage(env: ManagerBasedRLEnv, stage: int = 0) -> None:
     """Reset curriculum stage to specified value."""
     global CURRENT_CURRICULUM_STAGE
     CURRENT_CURRICULUM_STAGE = stage
-    print(f"🔄 CURRICULUM RESET: Stage {stage}")
+    # print(f"🔄 CURRICULUM RESET: Stage {stage}")
 
 # #------------------Ignore, since we will be using velocity reward instead------------------
 # def screwdriver_reached_target_angle(env: ManagerBasedRLEnv, tol_deg: float = 5.0, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
@@ -1137,7 +1224,7 @@ class EventCfg:
     # apply_screwdriver_friction = EventTerm(
     #     func=apply_screwdriver_friction,
     #     mode="reset",
-    #     params = {"static_friction" : 1.0, "dynamic_friction" : 0.8, "restitution" : 0.0}
+    #     params = {"static_friction" : 10.0, "dynamic_friction" : 10.0, "restitution" : 0.0}
     # )
     
     # Reset screwdriver positions (this adds env_origins offset)
@@ -1224,7 +1311,7 @@ class RewardsCfg:
     screwdriver_rotation = RewTerm(
         func=screwdriver_signed_yaw_velocity_reward,
         # Map yaw velocity to [-1, 1] via clipping with vmax
-        weight=6.0,
+        weight=3.0,
         params={
             "asset_cfg": SceneEntityCfg("screwdriver"),
             "vmax": 4.0,    # normalize & clip to [-1,1]
@@ -1235,7 +1322,7 @@ class RewardsCfg:
     screwdriver_stability = RewTerm(
         func=screwdriver_stability_reward,
         # stability reward returns exp(-||w_xy||^2) ∈ (0, 1], keep weight ~1
-        weight=1.0,
+        weight=10.0,
         params={"asset_cfg": SceneEntityCfg("screwdriver")},
     )
 
@@ -1244,7 +1331,7 @@ class RewardsCfg:
     # (6) Finger joint deviation penalty to encourage finger gaiting (masked by stage)
     finger_deviation_penalty = RewTerm(
         func=finger_joint_deviation_penalty,
-        weight=1.0,  # Small penalty to encourage movement without overwhelming other rewards
+        weight=12.0,  # Small penalty to encourage movement without overwhelming other rewards
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
             "allegro_hand_hitosashi_finger_finger_joint_0",
             "allegro_hand_hitosashi_finger_finger_joint_1",
@@ -1268,12 +1355,12 @@ class RewardsCfg:
     # (7) Effort and energy regularization
     torque_mag_penalty = RewTerm(
         func=torque_penalty,
-        weight=0.03,
+        weight=0.1,
         params={"asset_cfg": SceneEntityCfg("robot"), "joint_names": None, "weight": 1e-3},
     )
     energy_penalty = RewTerm(
         func=energy_penalty_abs,
-        weight=10.0,
+        weight=20.0,
         params={"asset_cfg": SceneEntityCfg("robot"), "joint_names": None, "scale": 5e-4},
     )
 
