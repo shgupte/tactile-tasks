@@ -80,7 +80,7 @@ def generate_random_regular_screwdriver(size_range="regular"):
 def generate_short_screwdriver():
     # Random parameters
     # param for corl
-    handle_radius = random.uniform(0.01, 0.03)
+    handle_radius = random.uniform(0.01, 0.02)
     handle_height = random.uniform(0.1, 0.1)
     shaft_radius = random.uniform(0.005, 0.005)
     shaft_height = random.uniform(0.05, 0.05)
