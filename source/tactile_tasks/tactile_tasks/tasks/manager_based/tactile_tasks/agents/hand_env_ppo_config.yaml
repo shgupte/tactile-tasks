@@ -61,7 +61,7 @@ params:
     
     # Reward shaping
     reward_shaper:
-      scale_value: 0.5
+      scale_value: 0.1
     
     # Advantage normalization
     normalize_advantage: True
@@ -69,10 +69,9 @@ params:
     # PPO hyperparameters optimized for hand manipulation
     gamma: 0.995  # Higher discount for longer-term rewards
     tau: 0.95     # GAE parameter
-    learning_rate: 1e-4  # Lowered for stability
-    learning_rate: 1e-4  # Lowered for stability
+    learning_rate: 5e-5  # Lowered for stability
     lr_schedule: adaptive
-    kl_threshold: 0.03
+    kl_threshold: 0.008
     score_to_win: 100000  # Higher target for complex task
     
     # Standard deviation bounds to prevent negative std

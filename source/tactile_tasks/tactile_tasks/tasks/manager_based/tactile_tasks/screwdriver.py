@@ -15,8 +15,8 @@ PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 @configclass
 class ScrewdriverCfg(RigidObjectCfg):
     spawn = sim_utils.UsdFileCfg(
-        #usd_path='/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver/screwdriver_fric.usd',
-        usd_path='/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/sd_root/usd_files/object/random_screwdrivers/random_screwdriver_0/screwdriver.usd',
+        usd_path='/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/screwdriver_fric.usd',
+        # usd_path='/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/sd_root/usd_files/object/random_screwdrivers/random_screwdriver_0/screwdriver.usd',
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,  # Enable gravity so it rests on table
             rigid_body_enabled=True,
@@ -27,13 +27,14 @@ class ScrewdriverCfg(RigidObjectCfg):
         )
     )
     init_state = RigidObjectCfg.InitialStateCfg(
+        #pos=(0.0, 0.0, 0.015),
         pos=(0.0, 0.0, 0.155),  # Position above table
         rot=(1.0, 0.0, 0.0, 0.0),
     )
     
     # Tip offset in local frame (meters) - adjust based on your screwdriver USD
     # tip_offset_local = (0.0, 0.0, -0.045) 
-    tip_offset_local = (0.0, 0.0, -0.12) # use ths one for random screwdrivers
+    tip_offset_local = (0.0, 0.0, -0.13) # use ths one for random screwdrivers
 
 
 
