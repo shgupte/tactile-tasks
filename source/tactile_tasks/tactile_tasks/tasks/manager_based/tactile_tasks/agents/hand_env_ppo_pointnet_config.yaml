@@ -1,0 +1,155 @@
+params:
+  seed: 67
+
+  # Environment wrapper clipping
+  env:
+    # clip_observations: 5.0
+    frame_stack: 3
+    clip_actions: 5.0  # Match your joint action clipping
+
+  # Algorithm configuration
+  algo:
+    name: a2c_continuous
+    ppo: true
+
+  # Model configuration
+  model:
+    name: continuous_a2c_logstd
+
+  # Network architecture optimized for hand manipulation
+  network:
+    # Use the custom registered network that wraps PointNet + MLP heads
+    name: pointnet_ac_policy
+    separate: False
+    space:
+      continuous:
+        mu_activation: None
+        sigma_activation: None
+        mu_init:
+          name: default
+        sigma_init:
+          name: const_initializer
+          val: .001 # 0.0035 # used to be 0.0035
+        fixed_sigma: True # used to be True 
+    mlp:
+      # Larger network for complex hand manipulation
+      units: [512, 512, 256, 128]
+      activation: elu
+      d2rl: False
+      initializer:
+        name: default
+      regularizer:
+        name: None
+    # PointNet front-end configuration (parsed by the custom network)
+    pointnet:
+      pc_points: 4096        # number of points expected in the point cloud
+      pc_channels: 3         # e.g., 3=xyz, 6=xyzrgb
+      global_feat_dim: 1024  # latent size output by PointNet
+      use_feature_transform: True
+
+  # Checkpoint configuration
+  load_checkpoint: False
+  load_path: ''
+
+  # Training configuration optimized for RTX 4070 Ti
+  config:
+    name: hand_manipulation_ppo
+    env_name: rlgpu
+    device: 'cuda:0'
+    device_name: 'cuda:0'
+    multi_gpu: False
+    ppo: True
+    mixed_precision: False  # Keep false for stability with hand manipulation
+    
+    # Input/Output normalization
+    normalize_input: True
+    normalize_value: True
+    num_actors: -1  # Will be set from num_envs
+    
+    # Reward shaping
+    reward_shaper:
+      scale_value: 0.1
+    
+    # Advantage normalization
+    normalize_advantage: True
+    
+    # PPO hyperparameters optimized for hand manipulation
+    gamma: 0.995  # Higher discount for longer-term rewards
+    tau: 0.95     # GAE parameter
+    learning_rate: 5e-5  # Lowered for stability
+    lr_schedule: adaptive
+    kl_threshold: 0.008
+    score_to_win: 100000  # Higher target for complex task
+    
+    # Standard deviation bounds to prevent negative std
+    min_std: 0.01
+    max_std: 1.0
+    
+    # Training schedule
+    max_epochs: 4000
+    save_best_after: 100
+    save_frequency: 50
+    
+    # Gradient and optimization settings
+    grad_norm: 0.5  # Lowered for stability
+    entropy_coef: 0.003  # Lowered for stability
+    truncate_grads: True
+    e_clip: 0.2
+    
+    # Experience collection - optimized for RTX 4070 Ti
+    horizon_length: 256  # Longer horizon for complex manipulation
+    minibatch_size: 4096  # Larger batch size to utilize 12GB VRAM
+    mini_epochs: 5  # More epochs per update
+    
+    # Value function settings
+    critic_coef: 1.0  # Lower critic weight for hand manipulation
+    clip_value: True
+    
+    # Sequence length for recurrent components
+    seq_length: 4
+    
+    # Bounds loss for action constraints
+    bounds_loss_coef: 0.005  # Higher penalty for action bounds
+    
+    # Additional PPO settings for hand manipulation
+    value_bootstrap: True
+    use_sde: False
+    sde_sample_freq: -1
+    
+    # Logging and monitoring
+    log_interval: 10
+    save_interval: 50
+    
+    # Early stopping
+    early_stop: True
+    
+    # Curriculum learning support
+    curriculum_learning: False
+    
+    # Memory optimization for RTX 4070 Ti
+    use_amp: False  # Disable automatic mixed precision for stability
+    async_rl: False
+    
+    # Experience replay settings
+    experience_buffer_size: 1000000
+    
+    # Additional stability settings for hand manipulation
+    max_grad_norm: 0.5
+    value_loss_coef: 0.5
+    policy_loss_coef: 1.0
+    
+    # Observation and action space specific settings
+    obs_scale: 1.0
+    action_scale: 1.0
+    
+    # Reward normalization
+    reward_scale: 1.0
+    
+    # Environment specific settings
+    env_config:
+      num_envs: 256  # Default, will be overridden by script
+      episode_length: 2400  # 5 seconds at 120Hz with decimation=2
+      sim_dt: 0.008333  # 1/120
+      decimation: 2
+
+

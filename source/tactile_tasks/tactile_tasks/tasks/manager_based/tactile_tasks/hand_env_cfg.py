@@ -183,16 +183,16 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
         joint.CreateLocalPos1Attr().Set(Gf.Vec3d(*tip_offset_local_f))
         joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
                 
-        # physx_joint_api = PhysxSchema.PhysxJointAPI.Apply(joint_prim)
-        # # Use an angular drive with damping to emulate joint friction (supported for non-articulation joints).
-        # drive = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
-        # drive.CreateStiffnessAttr().Set(0.0)   # no spring target
-        # # Randomize viscous damping per-env using a clipped normal around 0.10 N·m·s/rad
-        # mu, sigma = 0.10, 0.05
-        # damping = float(torch.randn(()).mul(sigma).add(mu).clamp(0.02, 0.30))
-        # drive.CreateDampingAttr().Set(damping)
-        # # Cap opposing torque to avoid saturation at typical speeds (tunable)
-        # drive.CreateMaxForceAttr().Set(2.0)
+        physx_joint_api = PhysxSchema.PhysxJointAPI.Apply(joint_prim)
+        # Use an angular drive with damping to emulate joint friction (supported for non-articulation joints).
+        drive = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
+        drive.CreateStiffnessAttr().Set(0.0)   # no spring target
+        # Randomize viscous damping per-env using a clipped normal around 0.10 N·m·s/rad
+        mu, sigma = 0.10, 0.05
+        damping = float(torch.randn(()).mul(sigma).add(mu).clamp(0.02, 0.30))
+        drive.CreateDampingAttr().Set(damping)
+        # Cap opposing torque to avoid saturation at typical speeds (tunable)
+        drive.CreateMaxForceAttr().Set(2.0)
 
         
         # print(f"Env {env_i}: Applied PhysX joint API with minimal friction")
@@ -347,9 +347,9 @@ def _discover_random_screwdriver_usds() -> list[str]:
 
     Searches: .../usd_files/object/random_screwdrivers/**/screwdriver.usd
     """
-    base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/sd_root/usd_files/object"
-    pattern = os.path.join(base_dir, "random_screwdrivers", "**", "screwdriver.usd")
-    return sorted(glob.glob(pattern, recursive=True))
+    base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
+    pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
+    return sorted(glob.glob(pattern))
 
 
 def randomize_screwdriver_geometry_prestartup(
@@ -695,6 +695,10 @@ def energy_penalty_abs(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Scene
     base = -scale * power_abs * dt
     # Curriculum-independent: no stage gating
     return base
+
+def add_action_noise(env, std: float = 0.02):
+    a = env.action_manager.action
+    env.action_manager.action = torch.clamp(a + std * torch.randn_like(a), -1.0, 1.0)
 
 
 def finger_joint_deviation_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), degrees: bool = False) -> torch.Tensor:
@@ -1103,6 +1107,8 @@ class EventCfg:
         },
     )
     
+    add_action_noise = EventTerm(func=add_action_noise, mode="pre_physics_step", params={"std": 0.02})
+    
     # apply_screwdriver_friction = EventTerm(
     #     func=apply_screwdriver_friction,
     #     mode="reset",
@@ -1116,19 +1122,19 @@ class EventCfg:
         params={"asset_cfg": SceneEntityCfg("screwdriver")},
     )
 
-    # Prestartup: randomize physics material friction for screwdriver colliders
-    randomize_screwdriver_friction = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("screwdriver"),
-            "static_friction_range": (1.0, 1.0),
-            "dynamic_friction_range": (1.0, 1.0),
-            "restitution_range": (0.025, 0.025),
-            "num_buckets": 8,
-            "make_consistent": True,
-        },
-    )
+    # # Prestartup: randomize physics material friction for screwdriver colliders
+    # randomize_screwdriver_friction = EventTerm(
+    #     func=mdp.randomize_rigid_body_material,
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("screwdriver"),
+    #         "static_friction_range": (0.4, 1.2),
+    #         "dynamic_friction_range": (0.3, 1.0),
+    #         "restitution_range": (0.0, 0.05),
+    #         "num_buckets": 8,
+    #         "make_consistent": True,
+    #     },
+    # )
 
     # Reset screwdriver positions (this adds env_origins offset)
     reset_screwdriver_pose = EventTerm(
