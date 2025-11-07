@@ -11,6 +11,8 @@ from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedEnv, ManagerBasedRLEnvC
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
+
+from omni.isaac.dynamic_control import _dynamic_control as dc  # 5.0.0: use underscored module, then acquire
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
@@ -51,6 +53,8 @@ class AllegroSceneCfg(InteractiveSceneCfg):
         prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
     )
     
+    
+    # # For if we want there to be a surface other than the world under the screwdriver
     # table
     # table = AssetBaseCfg(
     #     prim_path="{ENV_REGEX_NS}/Table",
@@ -132,123 +136,82 @@ class AllegroScene(InteractiveScene):
 
         # After screwdriver is spawned but before cloning envs, author the joint
         stage = self.stage
+        
 
 
 def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> None:
-    """Create a spherical joint at the screwdriver tip for each env, called once during initialization."""
+    """
+    Connects screwdriver tip to a fixed point in world space using a D6 joint with damping.
+    This is MUCH simpler than using three revolute joints.
+    """
     stage = get_current_stage()
     screwdriver = env.scene[asset_cfg.name]
     screwdriver_cfg = ScrewdriverCfg()
     tip_offset_local = screwdriver_cfg.tip_offset_local
     env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
-    
+
     for env_i in env_indices:
-        # Use per-environment state, even if prim is shared
         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
-        joint_path = f"/World/envs/env_{env_i}/ScrewdriverTipPivot"
-        
-        # print(f"Env {env_i}: Creating joint at {joint_path}, Screwdriver state index = {env_i}")
-        
-        # Compute tip world position using per-environment state
+        base = f"/World/envs/env_{env_i}"
+
+        # Compute tip world position
         root_pose = screwdriver.data.root_state_w[env_i, :7]
         pos = root_pose[:3].cpu().numpy()
         qw, qx, qy, qz = root_pose[3:].cpu().numpy()
-        tip_offset = torch.tensor(tip_offset_local, dtype=torch.float64)
-        quat = torch.tensor([qw, qx, qy, qz], dtype=torch.float64)
-        quat = quat / torch.norm(quat)
-        tip_world = (torch.tensor(pos, dtype=torch.float64) + quat_apply(quat, tip_offset)).cpu().numpy()
-        
-         # print(f"Env {env_i}: Root pos = {pos}, Quat = {[qw, qx, qy, qz]}, Tip world = {tip_world}")
-        
-        # Create or update joint
-        joint_prim = stage.GetPrimAtPath(joint_path)
-        if not joint_prim.IsValid():
-            joint = UsdPhysics.SphericalJoint.Define(stage, joint_path)
-            # print(f"Env {env_i}: Defined new joint at {joint_path}")
-        else:
-            joint = UsdPhysics.SphericalJoint(joint_prim)
-            # print(f"Env {env_i}: Updating existing joint at {joint_path}")
-        joint_prim = stage.GetPrimAtPath(joint_path)
+        q = Gf.Quatd(float(qw), float(qx), float(qy), float(qz))
+        tip_off = Gf.Vec3d(*[float(v) for v in tip_offset_local])
+        tip_world = Gf.Vec3d(*(pos.tolist())) + q.Transform(tip_off)
 
+        # Create or get the D6 joint
+        joint_path = f"{base}/TipSphericalJoint"
+        if not stage.GetPrimAtPath(joint_path).IsValid():
+            joint = UsdPhysics.Joint.Define(stage, joint_path)
+        else:
+            joint = UsdPhysics.Joint(stage.GetPrimAtPath(joint_path))
         
-        # Set joint targets (body0 = world, body1 = screwdriver)
-        joint.CreateBody0Rel().SetTargets([])  # World frame
+        jp = stage.GetPrimAtPath(joint_path)
+        
+        # Body0 is world (don't set it), Body1 is screwdriver
         joint.CreateBody1Rel().SetTargets([Sdf.Path(screwdriver_prim_path)])
         
-        # Set anchor points
-        tip_world_pos_f = tuple(float(x) for x in tip_world)
-        tip_offset_local_f = tuple(float(x) for x in tip_offset_local)
-        joint.CreateLocalPos0Attr().Set(Gf.Vec3d(*tip_world_pos_f))
+        # Set the joint position at the tip in world space
+        joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*[float(v) for v in tip_world]))
         joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-        joint.CreateLocalPos1Attr().Set(Gf.Vec3d(*tip_offset_local_f))
-        joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-                
-        physx_joint_api = PhysxSchema.PhysxJointAPI.Apply(joint_prim)
-        # Use an angular drive with damping to emulate joint friction (supported for non-articulation joints).
-        drive = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
-        drive.CreateStiffnessAttr().Set(0.0)   # no spring target
-        # Randomize viscous damping per-env using a clipped normal around 0.10 N·m·s/rad
-        mu, sigma = 0.10, 0.05
-        damping = float(torch.randn(()).mul(sigma).add(mu).clamp(0.02, 0.30))
-        drive.CreateDampingAttr().Set(damping)
-        # Cap opposing torque to avoid saturation at typical speeds (tunable)
-        drive.CreateMaxForceAttr().Set(2.0)
-
         
-        # print(f"Env {env_i}: Applied PhysX joint API with minimal friction")
-# def apply_screwdriver_friction(env, env_ids, static_friction, dynamic_friction, restitution):
-#     screwdriver = env.scene["screwdriver"]
-#     # Loop over per-env prim paths if you have multiple envs
-#     env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
+        # On the screwdriver, attach at the tip offset
+        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(*[float(v) for v in tip_offset_local]))
+        joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+        
+        # Apply PhysX API to access advanced features
+        PhysxSchema.PhysxJointAPI.Apply(jp)
+        
+        # Lock all translations (X, Y, Z) - no movement
+        for axis in ["transX", "transY", "transZ"]:
+            limit = UsdPhysics.LimitAPI.Apply(jp, axis)
+            limit.CreateLowAttr().Set(0.0)
+            limit.CreateHighAttr().Set(0.0)
+        
+        # Leave rotations free but add damping
+        axes = ["rotZ"]
+        for axis in axes:
+            drive = UsdPhysics.DriveAPI.Apply(jp, axis)
+            drive.CreateTypeAttr().Set("force")
+            drive.CreateStiffnessAttr().Set(0.0)
+            # Randomize damping slightly
+            damping = 0.1
+            drive.CreateDampingAttr().Set(damping)
+            drive.CreateMaxForceAttr().Set(0.001)
+        # axes = ["rotY"]
+        # for axis in axes:
+        #     drive = UsdPhysics.DriveAPI.Apply(jp, axis)
+        #     drive.CreateTypeAttr().Set("force")
+        #     drive.CreateStiffnessAttr().Set(0.0)
+        #     # Randomize damping slightly
+        #     damping = 0.1
+        #     drive.CreateDampingAttr().Set(damping)
+        #     drive.CreateMaxForceAttr().Set(0.01)
+        
 
-#     for env_i in env_indices:
-#         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
-#         material_path = f"{screwdriver_prim_path}/PhysicsMaterial"
-#         mat_cfg = RigidBodyMaterialCfg(
-#             static_friction=static_friction,
-#             dynamic_friction=dynamic_friction,
-#             restitution=restitution,
-#         )
-#         # Create the material prim
-#         mat_cfg.func(material_path, mat_cfg)
-#         # Bind to the screwdriver prim (applies to its colliders)
-#         bind_physics_material(screwdriver_prim_path, material_path)
-# def apply_screwdriver_friction(env, env_ids, static_friction, dynamic_friction, restitution):
-#     screwdriver = env.scene["screwdriver"]
-#     env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
-#     stage = get_context().get_stage()
-
-#     for env_i in env_indices:
-#         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
-#         material_path = f"{screwdriver_prim_path}/PhysicsMaterial"
-
-#         # Step 1: Uninstance all children so we can modify them
-#         screwdriver_prim = stage.GetPrimAtPath(screwdriver_prim_path)
-#         for child in screwdriver_prim.GetChildren():
-#             if child.IsInstance():
-#                 child.SetInstanceable(False)
-
-#         # Step 2: Create material
-#         mat_cfg = RigidBodyMaterialCfg(
-#             static_friction=static_friction,
-#             dynamic_friction=dynamic_friction,
-#             restitution=restitution,
-#         )
-
-#         # This is the correct way to create the prim on stage
-#         mat_cfg.func.to_prim(material_path)
-
-#         # Step 3: Bind the material
-#         success = bind_physics_material(screwdriver_prim_path, material_path)
-
-#         if not success:
-#             print(f"[Warning] Failed to bind material to {screwdriver_prim_path}")
-
-
-# from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
-# from isaaclab.sim.utils import bind_physics_material
-# from omni.usd import get_context
-# from pxr import Usd
 
 def recursively_uninstance_prim(prim):
     if prim.IsInstance():
@@ -293,7 +256,7 @@ def add_screwdriver_rotation_markers(env, env_ids, asset_cfg: SceneEntityCfg = S
 
     # Choose a small offset from the local origin so that the marker traces a circle when rotating.
     # Adjust if your screwdriver geometry needs a different radius.
-    marker_local_offset = Gf.Vec3f(0.04, 0.0, -0.1)
+    marker_local_offset = Gf.Vec3f(0.04, 0.0, 0.03)
     marker_radius = 0.004
 
     env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
@@ -588,6 +551,49 @@ def screwdriver_tilt_exceeds(
     threshold_cos = math.cos(math.radians(threshold_deg))
     return cos_theta < threshold_cos
 
+# def screwdriver_signed_yaw_velocity_reward(
+#     env: ManagerBasedRLEnv,
+#     asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
+#     *,
+#     degrees: bool = False,
+#     vmax: float | None = None,
+# ) -> torch.Tensor:
+#     """Reward negative (clockwise) yaw velocity, penalize positive (counter-clockwise).
+    
+#     - Positive reward for negative yaw_vel (clockwise rotation)
+#     - Negative reward for positive yaw_vel (counter-clockwise rotation)
+#     - Symmetric: reward magnitude equals penalty magnitude
+#     """
+#     asset: RigidObject = env.scene[asset_cfg.name]
+    
+#     yaw_vel = screwdriver_yaw_velocity(env, asset_cfg=asset_cfg, degrees=degrees).squeeze(-1)
+#     # Normalize and clip instead of using an explicit gain
+#     # if vmax is not None and vmax > 0:
+#     #     norm = yaw_vel / vmax
+#     # else:
+#     #     norm = yaw_vel
+#     base = -torch.clamp(yaw_vel, -4.0, 4.0)
+#     # Gate by curriculum stage: Stage 0 = off; Stage 1+ = on
+#     stage = 1#_get_curriculum_stage(env)
+#     return base
+
+
+# def screwdriver_yaw_velocity(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"), degrees: bool = False) -> torch.Tensor:
+#     """Return yaw angular velocity of the screwdriver in local frame.
+
+#     - Units: rad/s by default; set ``degrees=True`` for deg/s.
+#     - Shape: (num_envs, 1)
+#     """
+#     asset: RigidObject = env.scene[asset_cfg.name]
+#     ang_vel_w = asset.data.root_ang_vel_w
+#     quat = asset.data.root_quat_w
+#     rot_matrix = matrix_from_quat(quat)
+#     ang_vel_local = torch.bmm(rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)).squeeze(-1)
+#     yaw_vel = ang_vel_local[:, 2:3]
+#     if degrees:
+#         yaw_vel = yaw_vel * (180.0 / math.pi)
+#     return yaw_vel
+
 def screwdriver_signed_yaw_velocity_reward(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
@@ -597,39 +603,32 @@ def screwdriver_signed_yaw_velocity_reward(
 ) -> torch.Tensor:
     """Reward negative (clockwise) yaw velocity, penalize positive (counter-clockwise).
     
-    - Positive reward for negative yaw_vel (clockwise rotation)
-    - Negative reward for positive yaw_vel (counter-clockwise rotation)
-    - Symmetric: reward magnitude equals penalty magnitude
+    Only rewards rotation when screwdriver is reasonably upright (within 20 degrees).
+    This prevents wobbling motions from being falsely interpreted as yaw rotation.
     """
     asset: RigidObject = env.scene[asset_cfg.name]
     
-    yaw_vel = screwdriver_yaw_velocity(env, asset_cfg=asset_cfg, degrees=degrees).squeeze(-1)
-    # Normalize and clip instead of using an explicit gain
-    # if vmax is not None and vmax > 0:
-    #     norm = yaw_vel / vmax
-    # else:
-    #     norm = yaw_vel
-    base = -torch.clamp(yaw_vel, -4.0, 4.0)
-    # Gate by curriculum stage: Stage 0 = off; Stage 1+ = on
-    stage = 1#_get_curriculum_stage(env)
-    return base
-
-
-def screwdriver_yaw_velocity(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"), degrees: bool = False) -> torch.Tensor:
-    """Return yaw angular velocity of the screwdriver in local frame.
-
-    - Units: rad/s by default; set ``degrees=True`` for deg/s.
-    - Shape: (num_envs, 1)
-    """
-    asset: RigidObject = env.scene[asset_cfg.name]
+    # Get angular velocity in local frame
     ang_vel_w = asset.data.root_ang_vel_w
     quat = asset.data.root_quat_w
     rot_matrix = matrix_from_quat(quat)
     ang_vel_local = torch.bmm(rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)).squeeze(-1)
-    yaw_vel = ang_vel_local[:, 2:3]
-    if degrees:
-        yaw_vel = yaw_vel * (180.0 / math.pi)
-    return yaw_vel
+    yaw_vel = ang_vel_local[:, 2]  # Rotation around screwdriver's own Z-axis
+    
+    # Base reward for clockwise rotation (negative yaw velocity)
+    base_reward = -torch.clamp(yaw_vel, -5.0, 5.0)
+    
+    # Get upright alignment to gate the reward
+    z_axis = rot_matrix[:, :, 2]  # Screwdriver's local Z-axis in world frame
+    upright_alignment = z_axis[:, 2]  # Dot product with world Z-axis [0,0,1]
+    
+    # Only reward when reasonably upright (within ~20 degrees)
+    # cos(20°) ≈ 0.94
+    threshold_cos_20_deg = math.cos(math.radians(20.0))
+    upright_mask = (upright_alignment >= threshold_cos_20_deg).float()
+    
+    # Gate the reward: zero if tilted, full if upright
+    return base_reward * upright_mask
 
 
 def screwdriver_yaw_delta(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"), degrees: bool = False) -> torch.Tensor:
@@ -1115,12 +1114,12 @@ class EventCfg:
     #     params = {"static_friction" : 10.0, "dynamic_friction" : 10.0, "restitution" : 0.0}
     # )
     
-    # Prestartup: per-env geometry selection (safe USD edits before play)
-    randomize_screwdriver_usd = EventTerm(
-        func=randomize_screwdriver_geometry_prestartup,
-        mode="prestartup",
-        params={"asset_cfg": SceneEntityCfg("screwdriver")},
-    )
+    # # Prestartup: per-env geometry selection (safe USD edits before play)
+    # randomize_screwdriver_usd = EventTerm(
+    #     func=randomize_screwdriver_geometry_prestartup,
+    #     mode="prestartup",
+    #     params={"asset_cfg": SceneEntityCfg("screwdriver")},
+    # )
 
     # # Prestartup: randomize physics material friction for screwdriver colliders
     # randomize_screwdriver_friction = EventTerm(
@@ -1227,7 +1226,7 @@ class RewardsCfg:
     screwdriver_rotation = RewTerm(
         func=screwdriver_signed_yaw_velocity_reward,
         # Map yaw velocity to [-1, 1] via clipping with vmax
-        weight=3.0,
+        weight=4.0,
         params={
             "asset_cfg": SceneEntityCfg("screwdriver"),
             "vmax": 4.0,    # normalize & clip to [-1,1]
@@ -1247,7 +1246,7 @@ class RewardsCfg:
     # (6) Finger joint deviation penalty to encourage finger gaiting (masked by stage)
     finger_deviation_penalty = RewTerm(
         func=finger_joint_deviation_penalty,
-        weight=12.0,  # Small penalty to encourage movement without overwhelming other rewards
+        weight=8.0,  # Small penalty to encourage movement without overwhelming other rewards
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
             "allegro_hand_hitosashi_finger_finger_joint_0",
             "allegro_hand_hitosashi_finger_finger_joint_1",
@@ -1348,6 +1347,8 @@ class TestEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.origin_type = "world"  # Fixed world camera
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
+        self.sim.physx.solver_position_iteration_count = 16  # Default: 4
+        self.sim.physx.solver_velocity_iteration_count = 4   # Default: 1
         
 @configclass
 class TestContactEnvCfg(ManagerBasedRLEnvCfg):

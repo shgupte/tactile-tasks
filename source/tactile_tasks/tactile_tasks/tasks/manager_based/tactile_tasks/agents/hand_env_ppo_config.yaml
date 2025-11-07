@@ -28,7 +28,7 @@ params:
           name: default
         sigma_init:
           name: const_initializer
-          val: .001 # 0.0035 # used to be 0.0035
+          val: .002 # 0.0035 # used to be 0.0035
         fixed_sigma: True # used to be True 
     mlp:
       # Larger network for complex hand manipulation

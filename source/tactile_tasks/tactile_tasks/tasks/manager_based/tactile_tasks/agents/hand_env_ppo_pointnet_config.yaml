@@ -29,8 +29,8 @@ params:
           name: default
         sigma_init:
           name: const_initializer
-          val: .001 # 0.0035 # used to be 0.0035
-        fixed_sigma: True # used to be True 
+          val: .003 # 0.0035 # used to be 0.0035 # prev training was with 0.001 + fixed
+        fixed_sigma: False # used to be True 
     mlp:
       # Larger network for complex hand manipulation
       units: [512, 512, 256, 128]
@@ -76,7 +76,7 @@ params:
     # PPO hyperparameters optimized for hand manipulation
     gamma: 0.995  # Higher discount for longer-term rewards
     tau: 0.95     # GAE parameter
-    learning_rate: 5e-5  # Lowered for stability
+    learning_rate: 1e-4  # Lowered for stability
     lr_schedule: adaptive
     kl_threshold: 0.008
     score_to_win: 100000  # Higher target for complex task

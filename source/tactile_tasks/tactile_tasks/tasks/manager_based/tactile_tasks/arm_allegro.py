@@ -57,7 +57,7 @@ class AllegroCfg(ArticulationCfg):
             # "allegro_hand_oya_finger_joint_13": 0.3,
             # "allegro_hand_oya_finger_joint_14": 0.3,
             # "allegro_hand_oya_finger_joint_15": 1.0,# Gentle power grasp: fingers lightly curled around screwdriver shaft
-            "allegro_hand_hitosashi_finger_finger_joint_0": 0.0,
+            "allegro_hand_hitosashi_finger_finger_joint_0": 0.1,
             "allegro_hand_hitosashi_finger_finger_joint_1": 1.1,
             "allegro_hand_hitosashi_finger_finger_joint_2": 0.6,
             "allegro_hand_hitosashi_finger_finger_joint_3": 0.2,
@@ -65,7 +65,7 @@ class AllegroCfg(ArticulationCfg):
             "allegro_hand_naka_finger_finger_joint_5": 0.75,
             "allegro_hand_naka_finger_finger_joint_6": 0.5,
             "allegro_hand_naka_finger_finger_joint_7": 0.8,
-            "allegro_hand_kusuri_finger_finger_joint_8": 0.25,
+            "allegro_hand_kusuri_finger_finger_joint_8": 0.15,
             "allegro_hand_kusuri_finger_finger_joint_9": 1.1,
             "allegro_hand_kusuri_finger_finger_joint_10": 0.6,
             "allegro_hand_kusuri_finger_finger_joint_11": 0.2,
