@@ -310,7 +310,8 @@ def _discover_random_screwdriver_usds() -> list[str]:
 
     Searches: .../usd_files/object/random_screwdrivers/**/screwdriver.usd
     """
-    base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
+    # base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
+    base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver"
     pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
     return sorted(glob.glob(pattern))
 
@@ -1115,11 +1116,11 @@ class EventCfg:
     # )
     
     # # Prestartup: per-env geometry selection (safe USD edits before play)
-    # randomize_screwdriver_usd = EventTerm(
-    #     func=randomize_screwdriver_geometry_prestartup,
-    #     mode="prestartup",
-    #     params={"asset_cfg": SceneEntityCfg("screwdriver")},
-    # )
+    randomize_screwdriver_usd = EventTerm(
+        func=randomize_screwdriver_geometry_prestartup,
+        mode="prestartup",
+        params={"asset_cfg": SceneEntityCfg("screwdriver")},
+    )
 
     # # Prestartup: randomize physics material friction for screwdriver colliders
     # randomize_screwdriver_friction = EventTerm(
