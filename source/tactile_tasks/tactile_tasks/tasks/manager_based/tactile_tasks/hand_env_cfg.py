@@ -200,7 +200,7 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
             # Randomize damping slightly
             damping = 0.1
             drive.CreateDampingAttr().Set(damping)
-            drive.CreateMaxForceAttr().Set(0.001)
+            drive.CreateMaxForceAttr().Set(0.0015)
         # axes = ["rotY"]
         # for axis in axes:
         #     drive = UsdPhysics.DriveAPI.Apply(jp, axis)
@@ -446,18 +446,102 @@ def screwdriver_orientation_z_axis(env: ManagerBasedRLEnv, asset_cfg: SceneEntit
     return z_axis
 
 
-def screwdriver_angular_velocity_z(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
-    """Angular velocity around screwdriver's z-axis (for rotation reward)."""
+def screwdriver_yaw_angle_from_quaternion(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
+    """Compute yaw angle of the screwdriver relative to its initial orientation.
+    
+    Computes yaw by taking the difference between current and previous quaternion orientations,
+    extracting the yaw component. Returns yaw angle in radians.
+    
+    Returns:
+        yaw angle in radians, shape: (num_envs,)
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
-    # Get angular velocity in world frame
-    ang_vel_w = asset.data.root_ang_vel_w
-    # Get rotation matrix to transform to local frame
-    quat = asset.data.root_quat_w
-    rot_matrix = matrix_from_quat(quat)
-    # Transform angular velocity to local frame
-    ang_vel_local = torch.bmm(rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)).squeeze(-1)
-    # Return only z-component (yaw rotation)
-    return ang_vel_local[:, 2:3]  # Shape: (num_envs, 1)
+    quat = asset.data.root_quat_w  # (num_envs, 4) wxyz
+    R = matrix_from_quat(quat)  # (num_envs, 3, 3)
+    
+    # Initialize storage for initial quaternion if not present
+    if not hasattr(env, "_screwdriver_init_quat"):
+        env._screwdriver_init_quat = quat.clone()
+    
+    # Compute current yaw angle relative to initial orientation
+    R_init = matrix_from_quat(env._screwdriver_init_quat)
+    R_rel = torch.bmm(R, R_init.transpose(-2, -1))
+    yaw = torch.atan2(R_rel[:, 1, 0], R_rel[:, 0, 0])  # (num_envs,)
+    
+    return yaw
+
+
+def screwdriver_angular_velocity_z(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
+    """Angular velocity around screwdriver's z-axis computed from yaw angle differences.
+    
+    Computes yaw velocity by taking the difference between current and previous yaw angles,
+    then dividing by dt. This is more reliable than reading angular velocity directly from
+    the physics engine.
+    """
+    # Initialize storage for previous yaw and tracking if not present
+    if not hasattr(env, "_screwdriver_prev_yaw"):
+        env._screwdriver_prev_yaw = torch.zeros(env.num_envs, device=env.device)
+    if not hasattr(env, "_screwdriver_last_yaw_seen"):
+        env._screwdriver_last_yaw_seen = None
+    
+    # Get current yaw angle using the new function
+    current_yaw = screwdriver_yaw_angle_from_quaternion(env, asset_cfg=asset_cfg)  # (num_envs,)
+    
+    # Check if this is a new physics step (yaw has changed from last call)
+    is_new_step = False
+    if env._screwdriver_last_yaw_seen is None:
+        is_new_step = True
+    else:
+        # Check if yaw has changed significantly (new physics step)
+        yaw_diff = torch.abs(current_yaw - env._screwdriver_last_yaw_seen)
+        if torch.any(yaw_diff > 1e-5):  # Yaw has changed, this is a new physics step
+            is_new_step = True
+            # Update prev_yaw to the last yaw we saw (from previous step)
+            env._screwdriver_prev_yaw = env._screwdriver_last_yaw_seen.clone()
+    
+    # Compute yaw velocity: (current - prev) / dt with angle unwrapping
+    yaw_diff = current_yaw - env._screwdriver_prev_yaw
+    # Unwrap angles: if difference > pi, subtract 2*pi; if < -pi, add 2*pi
+    yaw_diff = yaw_diff - 2 * math.pi * torch.round(yaw_diff / (2 * math.pi))
+    dt = env.physics_dt
+    yaw_vel = yaw_diff / dt  # (num_envs,) yaw velocity in rad/s
+    
+    # Store current yaw for next step (will become prev_yaw when we detect next step)
+    env._screwdriver_last_yaw_seen = current_yaw.clone()
+    
+    # Return as (num_envs, 1) tensor to match original shape
+    return yaw_vel.unsqueeze(-1)  # Shape: (num_envs, 1)
+
+
+def reset_screwdriver_yaw_tracking(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) -> None:
+    """Reset yaw tracking state for specified environments.
+    
+    This should be called when environments reset to reinitialize the initial quaternion
+    and previous yaw angle for accurate yaw velocity computation.
+    """
+    asset: RigidObject = env.scene["screwdriver"]
+    quat = asset.data.root_quat_w  # (num_envs, 4) wxyz
+    
+    # Initialize storage if not present
+    if not hasattr(env, "_screwdriver_init_quat"):
+        env._screwdriver_init_quat = quat.clone()
+        env._screwdriver_prev_yaw = torch.zeros(env.num_envs, device=env.device)
+        env._screwdriver_last_yaw_seen = None
+    
+    # Reset for specified environments (or all if env_ids is None)
+    if env_ids is None:
+        env._screwdriver_init_quat = quat.clone()
+        env._screwdriver_prev_yaw = torch.zeros(env.num_envs, device=env.device)
+        env._screwdriver_last_yaw_seen = None
+    else:
+        env._screwdriver_init_quat[env_ids] = quat[env_ids].clone()
+        env._screwdriver_prev_yaw[env_ids] = 0.0
+        # Reset last_yaw_seen for reset environments
+        if env._screwdriver_last_yaw_seen is not None:
+            env._screwdriver_last_yaw_seen[env_ids] = 0.0
+        else:
+            env._screwdriver_last_yaw_seen = torch.zeros(env.num_envs, device=env.device)
+            env._screwdriver_last_yaw_seen[env_ids] = 0.0
 
 
 # Curriculum tracking variables some- this will be managed by the environment
@@ -608,17 +692,17 @@ def screwdriver_signed_yaw_velocity_reward(
     """
     asset: RigidObject = env.scene[asset_cfg.name]
     
-    # Get angular velocity in local frame
-    ang_vel_w = asset.data.root_ang_vel_w
-    quat = asset.data.root_quat_w
-    rot_matrix = matrix_from_quat(quat)
-    ang_vel_local = torch.bmm(rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)).squeeze(-1)
-    yaw_vel = ang_vel_local[:, 2]  # Rotation around screwdriver's own Z-axis
+    # Get yaw velocity computed from yaw angle differences
+    yaw_vel = screwdriver_angular_velocity_z(env, asset_cfg=asset_cfg).squeeze(-1)  # (num_envs,)
+    if degrees:
+        yaw_vel = yaw_vel * (180.0 / math.pi)
     
     # Base reward for clockwise rotation (negative yaw velocity)
     base_reward = -torch.clamp(yaw_vel, -5.0, 5.0)
     
     # Get upright alignment to gate the reward
+    quat = asset.data.root_quat_w
+    rot_matrix = matrix_from_quat(quat)
     z_axis = rot_matrix[:, :, 2]  # Screwdriver's local Z-axis in world frame
     upright_alignment = z_axis[:, 2]  # Dot product with world Z-axis [0,0,1]
     
@@ -637,9 +721,12 @@ def screwdriver_yaw_delta(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Sc
     - Units: radians per step by default; set ``degrees=True`` for degrees per step.
     - Shape: (num_envs, 1)
     """
-    yaw_vel = screwdriver_yaw_velocity(env, asset_cfg=asset_cfg, degrees=degrees)
+    yaw_vel = screwdriver_angular_velocity_z(env, asset_cfg=asset_cfg).squeeze(-1)
     dt = env.physics_dt
-    return yaw_vel * dt
+    yaw_delta = yaw_vel * dt
+    if degrees:
+        yaw_delta = yaw_delta * (180.0 / math.pi)
+    return yaw_delta.unsqueeze(-1)
 
 
 
@@ -849,16 +936,25 @@ def log_training_progress(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) 
     avg_upright = torch.mean(upright_rew).item()
     avg_stability = torch.mean(stability_rew).item()
     
-    # Get rotational velocity metrics
+    # Get rotational velocity metrics - OLD WAY (from physics engine)
     asset = env.scene["screwdriver"]
     ang_vel_w = asset.data.root_ang_vel_w
     quat = asset.data.root_quat_w
     rot_matrix = matrix_from_quat(quat)
     ang_vel_local = torch.bmm(rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)).squeeze(-1)
-    yaw_vel = ang_vel_local[:, 2]  # z-component (yaw rotation)
+    yaw_vel_old = ang_vel_local[:, 2]  # z-component (yaw rotation) - OLD WAY
     
-    avg_rot_vel = torch.mean(torch.abs(yaw_vel)).item()  # Average absolute rotational velocity
-    max_rot_vel = torch.max(torch.abs(yaw_vel)).item()   # Maximum absolute rotational velocity
+    # Get rotational velocity metrics - NEW WAY (from yaw angle differences)
+    yaw_vel_new = screwdriver_angular_velocity_z(env, asset_cfg=SceneEntityCfg("screwdriver")).squeeze(-1)
+    
+    avg_rot_vel_old = torch.mean(torch.abs(yaw_vel_old)).item()  # Average absolute rotational velocity (old way)
+    max_rot_vel_old = torch.max(torch.abs(yaw_vel_old)).item()   # Maximum absolute rotational velocity (old way)
+    avg_rot_vel_new = torch.mean(torch.abs(yaw_vel_new)).item()  # Average absolute rotational velocity (new way)
+    max_rot_vel_new = torch.max(torch.abs(yaw_vel_new)).item()   # Maximum absolute rotational velocity (new way)
+    
+    # For backward compatibility
+    avg_rot_vel = avg_rot_vel_old
+    max_rot_vel = max_rot_vel_old
     
     # Always print average upright percentage on reset (across all envs)
     asset_all: RigidObject = env.scene[SceneEntityCfg("screwdriver").name]
@@ -883,6 +979,35 @@ def reset_curriculum_stage(env: ManagerBasedRLEnv, stage: int = 0) -> None:
     CURRENT_CURRICULUM_STAGE = stage
     # print(f"🔄 CURRICULUM RESET: Stage {stage}")
 
+
+
+def log_yaw_velocity_comparison(env, env_ids=None) -> None:
+    """Log comparison between old and new yaw velocity computation methods during physics steps."""
+    # Get rotational velocity metrics - OLD WAY (from physics engine)
+    asset = env.scene["screwdriver"]
+    ang_vel_w = asset.data.root_ang_vel_w
+    quat = asset.data.root_quat_w
+    rot_matrix = matrix_from_quat(quat)
+    ang_vel_local = torch.bmm(rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)).squeeze(-1)
+    yaw_vel_old = ang_vel_local[:, 2]  # z-component (yaw rotation) - OLD WAY
+    
+    # Get rotational velocity metrics - NEW WAY (from yaw angle differences)
+    yaw_vel_new = screwdriver_angular_velocity_z(env, asset_cfg=SceneEntityCfg("screwdriver")).squeeze(-1)
+    
+    avg_rot_vel_old = torch.mean(torch.abs(yaw_vel_old)).item()
+    max_rot_vel_old = torch.max(torch.abs(yaw_vel_old)).item()
+    avg_rot_vel_new = torch.mean(torch.abs(yaw_vel_new)).item()
+    max_rot_vel_new = torch.max(torch.abs(yaw_vel_new)).item()
+    
+    # Compute multiplicative differences (ratios)
+    avg_ratio = avg_rot_vel_new / avg_rot_vel_old if avg_rot_vel_old > 1e-6 else float('inf')
+    max_ratio = max_rot_vel_new / max_rot_vel_old if max_rot_vel_old > 1e-6 else float('inf')
+    
+    # Debug info
+    current_yaw_sample = screwdriver_yaw_angle_from_quaternion(env, asset_cfg=SceneEntityCfg("screwdriver"))[0].item() if env.num_envs > 0 else 0.0
+    prev_yaw_sample = env._screwdriver_prev_yaw[0].item() if hasattr(env, "_screwdriver_prev_yaw") and env.num_envs > 0 else 0.0
+    
+    print(f"[YAW_VEL_COMPARISON] Old (physics): avg={avg_rot_vel_old:.4f}, max={max_rot_vel_old:.4f} | New (yaw diff): avg={avg_rot_vel_new:.4f}, max={max_rot_vel_new:.4f} | Diff: avg={abs(avg_rot_vel_old - avg_rot_vel_new):.4f}, max={abs(max_rot_vel_old - max_rot_vel_new):.4f} | Ratio (new/old): avg={avg_ratio:.4f}, max={max_ratio:.4f} | Debug: current_yaw={current_yaw_sample:.4f}, prev_yaw={prev_yaw_sample:.4f}")
 
 
 def log_contact_sensor_sample(env, env_ids=None) -> None:
@@ -1115,11 +1240,11 @@ class EventCfg:
     # )
     
     # # Prestartup: per-env geometry selection (safe USD edits before play)
-    # randomize_screwdriver_usd = EventTerm(
-    #     func=randomize_screwdriver_geometry_prestartup,
-    #     mode="prestartup",
-    #     params={"asset_cfg": SceneEntityCfg("screwdriver")},
-    # )
+    randomize_screwdriver_usd = EventTerm(
+        func=randomize_screwdriver_geometry_prestartup,
+        mode="prestartup",
+        params={"asset_cfg": SceneEntityCfg("screwdriver")},
+    )
 
     # # Prestartup: randomize physics material friction for screwdriver colliders
     # randomize_screwdriver_friction = EventTerm(
@@ -1144,6 +1269,12 @@ class EventCfg:
             "pose_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
             "velocity_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
         },
+    )
+    
+    # Reset yaw tracking state when environments reset
+    reset_yaw_tracking = EventTerm(
+        func=reset_screwdriver_yaw_tracking,
+        mode="reset",
     )
     
     create_tip_pivots = EventTerm(
@@ -1186,6 +1317,13 @@ class EventCfg:
         mode="interval",
         interval_range_s=(0.2, 0.2),  # Log every 0.2s
     )
+    
+    # Log yaw velocity comparison during physics steps (very frequently)
+    yaw_velocity_comparison_log = EventTerm(
+        func=log_yaw_velocity_comparison,
+        mode="interval",
+        interval_range_s=(0.1, 0.1),  # Log every 0.1s during physics steps
+    )
 
     # randomize_screwdriver_mass_event = EventTerm(
     #     func=randomize_screwdriver_mass,
@@ -1226,7 +1364,7 @@ class RewardsCfg:
     screwdriver_rotation = RewTerm(
         func=screwdriver_signed_yaw_velocity_reward,
         # Map yaw velocity to [-1, 1] via clipping with vmax
-        weight=4.0,
+        weight=6.0, # was 4 before changing to new yaw velocity computation method
         params={
             "asset_cfg": SceneEntityCfg("screwdriver"),
             "vmax": 4.0,    # normalize & clip to [-1,1]
