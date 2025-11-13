@@ -20,8 +20,8 @@ class AllegroCfg(ArticulationCfg):
             rigid_body_enabled=True,
             max_linear_velocity=1000.0,
             max_angular_velocity=1000.0,
-            max_depenetration_velocity=5.0,
-            enable_gyroscopic_forces=True,
+            max_depenetration_velocity=100.0,
+            enable_gyroscopic_forces=False,
             ),
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             articulation_enabled=True,
@@ -82,8 +82,8 @@ class AllegroCfg(ArticulationCfg):
                 joint_names_expr = [".*"],
                 effort_limit = 400.0,
                 velocity_limit = 100.0,
-                stiffness = 3.0,
-                damping = 3.0,
+                stiffness = 50.0,
+                damping = 5.0,
                 friction = 1.0,
                 ),
         }

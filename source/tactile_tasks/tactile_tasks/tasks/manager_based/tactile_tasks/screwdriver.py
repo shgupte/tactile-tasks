@@ -23,7 +23,7 @@ class ScrewdriverCfg(RigidObjectCfg):
             rigid_body_enabled=True,
             max_linear_velocity=1000.0,
             max_angular_velocity=1000.0,
-            max_depenetration_velocity=100.0,
+            max_depenetration_velocity=1000.0,
             enable_gyroscopic_forces=True,
         )
     )

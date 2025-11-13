@@ -71,6 +71,7 @@ class AllegroSceneCfg(InteractiveSceneCfg):
         update_period=0.0,
         history_length=6,
         debug_vis=True,
+        force_threshold = 0.01,  # Lower threshold to visualize smaller contact forces (default is typically 1.0)
     )
     # screwdriver_joint_path = "{ENV_REGEX_NS}/Joints/screwdriver_tip_joint"
 
@@ -103,6 +104,7 @@ class AllegroSceneWithCameraCfg(InteractiveSceneCfg):
         update_period=0.0,
         history_length=6,
         debug_vis=True,
+        force_threshold = 0.01,  # Lower threshold to visualize smaller contact forces (default is typically 1.0)
     )
     
     # Tiled camera for point cloud extraction
@@ -229,9 +231,9 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
             drive.CreateTypeAttr().Set("force")
             drive.CreateStiffnessAttr().Set(0.0)
             # Randomize damping slightly
-            damping = 0.1
+            damping = 1.0
             drive.CreateDampingAttr().Set(damping)
-            drive.CreateMaxForceAttr().Set(0.0015)
+            #drive.CreateMaxForceAttr().Set(2.0)
         # axes = ["rotY"]
         # for axis in axes:
         #     drive = UsdPhysics.DriveAPI.Apply(jp, axis)
@@ -496,40 +498,40 @@ class ActionsCfg:
                                                 "allegro_hand_oya_finger_joint_13",
                                                 "allegro_hand_oya_finger_joint_14",
                                                 "allegro_hand_oya_finger_joint_15"],
-                                           scale=1.0,  # Reduced from 1.0 for stability
+                                           scale=0.1,  # Reduced from 1.0 for stability
                                            preserve_order=True,
-                                        #    clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-2.0, 2.0),
-                                        #          "allegro_hand_hitosashi_finger_finger_joint_1": (-2.0, 2.0),
-                                        #          "allegro_hand_hitosashi_finger_finger_joint_2": (-2.0, 2.0),
-                                        #          "allegro_hand_hitosashi_finger_finger_joint_3": (-2.0, 2.0),
-                                        #          "allegro_hand_naka_finger_finger_joint_4": (-2.0, 2.0),
-                                        #          "allegro_hand_naka_finger_finger_joint_5": (-2.0, 2.0),
-                                        #          "allegro_hand_naka_finger_finger_joint_6": (-2.0, 2.0),
-                                        #          "allegro_hand_naka_finger_finger_joint_7": (-2.0, 2.0),
-                                        #          "allegro_hand_kusuri_finger_finger_joint_8": (-2.0, 2.0),
-                                        #          "allegro_hand_kusuri_finger_finger_joint_9": (-2.0, 2.0),
-                                        #          "allegro_hand_kusuri_finger_finger_joint_10": (-2.0, 2.0),
-                                        #          "allegro_hand_kusuri_finger_finger_joint_11": (-2.0, 2.0),
-                                        #          "allegro_hand_oya_finger_joint_12": (-2.0, 2.0),
-                                        #          "allegro_hand_oya_finger_joint_13": (-2.0, 2.0),
-                                        #          "allegro_hand_oya_finger_joint_14": (-2.0, 2.0),
-                                        #          "allegro_hand_oya_finger_joint_15": (-2.0, 2.0)}
-                                           clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-5.0, 5.0),
-                                                 "allegro_hand_hitosashi_finger_finger_joint_1": (-5.0, 5.0),
-                                                 "allegro_hand_hitosashi_finger_finger_joint_2": (-5.0, 5.0),
-                                                 "allegro_hand_hitosashi_finger_finger_joint_3": (-5.0, 5.0),
-                                                 "allegro_hand_naka_finger_finger_joint_4": (-5.0, 5.0),
-                                                 "allegro_hand_naka_finger_finger_joint_5": (-5.0, 5.0),
-                                                 "allegro_hand_naka_finger_finger_joint_6": (-5.0, 5.0),
-                                                 "allegro_hand_naka_finger_finger_joint_7": (-5.0, 5.0),
-                                                 "allegro_hand_kusuri_finger_finger_joint_8": (-5.0, 5.0),
-                                                 "allegro_hand_kusuri_finger_finger_joint_9": (-5.0, 5.0),
-                                                 "allegro_hand_kusuri_finger_finger_joint_10": (-5.0, 5.0),
-                                                 "allegro_hand_kusuri_finger_finger_joint_11": (-5.0, 5.0),
-                                                 "allegro_hand_oya_finger_joint_12": (-5.0, 5.0),
-                                                 "allegro_hand_oya_finger_joint_13": (-5.0, 5.0),
-                                                 "allegro_hand_oya_finger_joint_14": (-5.0, 5.0),
-                                                 "allegro_hand_oya_finger_joint_15": (-5.0, 5.0)}
+                                           clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-2.0, 2.0),
+                                                 "allegro_hand_hitosashi_finger_finger_joint_1": (-2.0, 2.0),
+                                                 "allegro_hand_hitosashi_finger_finger_joint_2": (-2.0, 2.0),
+                                                 "allegro_hand_hitosashi_finger_finger_joint_3": (-2.0, 2.0),
+                                                 "allegro_hand_naka_finger_finger_joint_4": (-2.0, 2.0),
+                                                 "allegro_hand_naka_finger_finger_joint_5": (-2.0, 2.0),
+                                                 "allegro_hand_naka_finger_finger_joint_6": (-2.0, 2.0),
+                                                 "allegro_hand_naka_finger_finger_joint_7": (-2.0, 2.0),
+                                                 "allegro_hand_kusuri_finger_finger_joint_8": (-2.0, 2.0),
+                                                 "allegro_hand_kusuri_finger_finger_joint_9": (-2.0, 2.0),
+                                                 "allegro_hand_kusuri_finger_finger_joint_10": (-2.0, 2.0),
+                                                 "allegro_hand_kusuri_finger_finger_joint_11": (-2.0, 2.0),
+                                                 "allegro_hand_oya_finger_joint_12": (-2.0, 2.0),
+                                                 "allegro_hand_oya_finger_joint_13": (-2.0, 2.0),
+                                                 "allegro_hand_oya_finger_joint_14": (-2.0, 2.0),
+                                                 "allegro_hand_oya_finger_joint_15": (-2.0, 2.0)}
+                                        #    clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-5.0, 5.0),
+                                        #          "allegro_hand_hitosashi_finger_finger_joint_1": (-5.0, 5.0),
+                                        #          "allegro_hand_hitosashi_finger_finger_joint_2": (-5.0, 5.0),
+                                        #          "allegro_hand_hitosashi_finger_finger_joint_3": (-5.0, 5.0),
+                                        #          "allegro_hand_naka_finger_finger_joint_4": (-5.0, 5.0),
+                                        #          "allegro_hand_naka_finger_finger_joint_5": (-5.0, 5.0),
+                                        #          "allegro_hand_naka_finger_finger_joint_6": (-5.0, 5.0),
+                                        #          "allegro_hand_naka_finger_finger_joint_7": (-5.0, 5.0),
+                                        #          "allegro_hand_kusuri_finger_finger_joint_8": (-5.0, 5.0),
+                                        #          "allegro_hand_kusuri_finger_finger_joint_9": (-5.0, 5.0),
+                                        #          "allegro_hand_kusuri_finger_finger_joint_10": (-5.0, 5.0),
+                                        #          "allegro_hand_kusuri_finger_finger_joint_11": (-5.0, 5.0),
+                                        #          "allegro_hand_oya_finger_joint_12": (-5.0, 5.0),
+                                        #          "allegro_hand_oya_finger_joint_13": (-5.0, 5.0),
+                                        #          "allegro_hand_oya_finger_joint_14": (-5.0, 5.0),
+                                        #          "allegro_hand_oya_finger_joint_15": (-5.0, 5.0)}
                                         
     )
     
@@ -1485,11 +1487,11 @@ class EventCfg:
     # )
     
     # # Prestartup: per-env geometry selection (safe USD edits before play)
-    randomize_screwdriver_usd = EventTerm(
-        func=randomize_screwdriver_geometry_prestartup,
-        mode="prestartup",
-        params={"asset_cfg": SceneEntityCfg("screwdriver")},
-    )
+    # randomize_screwdriver_usd = EventTerm(
+    #     func=randomize_screwdriver_geometry_prestartup,
+    #     mode="prestartup",
+    #     params={"asset_cfg": SceneEntityCfg("screwdriver")},
+    # )
 
     # # Prestartup: randomize physics material friction for screwdriver colliders
     # randomize_screwdriver_friction = EventTerm(
@@ -1742,8 +1744,8 @@ class TestEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.origin_type = "world"  # Fixed world camera
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
-        self.sim.physx.solver_position_iteration_count = 16  # Default: 4
-        self.sim.physx.solver_velocity_iteration_count = 4   # Default: 1
+        self.sim.physx.solver_position_iteration_count = 32  # Default: 4
+        self.sim.physx.solver_velocity_iteration_count = 8   # Default: 1
         
 @configclass
 class TestContactEnvCfg(ManagerBasedRLEnvCfg):
