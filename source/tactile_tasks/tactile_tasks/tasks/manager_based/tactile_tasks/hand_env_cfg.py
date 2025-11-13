@@ -431,7 +431,8 @@ def _discover_random_screwdriver_usds() -> list[str]:
 
     Searches: .../usd_files/object/random_screwdrivers/**/screwdriver.usd
     """
-    base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
+    # base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
+    base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver"
     pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
     return sorted(glob.glob(pattern))
 
