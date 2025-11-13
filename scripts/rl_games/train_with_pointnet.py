@@ -69,6 +69,7 @@ import omni
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.algo_observer import IsaacAlgoObserver
 from rl_games.torch_runner import Runner
+from rl_games.algos_torch import model_builder
 
 from isaaclab.envs import (
     DirectMARLEnv,

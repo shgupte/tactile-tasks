@@ -6,6 +6,7 @@
 import math
 from omni.usd import get_context
 import isaaclab.sim as sim_utils
+
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedEnv, ManagerBasedRLEnvCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
@@ -24,11 +25,14 @@ from isaaclab.scene import InteractiveSceneCfg, InteractiveScene
 from isaacsim.core.utils.stage import get_current_stage
 from isaaclab.utils import configclass
 from pxr import Usd, Sdf, UsdGeom, UsdPhysics, PhysxSchema, Gf
+
 import torch
 import isaaclab.envs.mdp as mdp
 from isaaclab.utils.math import quat_apply, matrix_from_quat
 from typing import TYPE_CHECKING
 from isaaclab.sensors import ContactSensorCfg
+from isaaclab.sensors.camera import TiledCameraCfg
+from isaaclab.sensors.camera.utils import create_pointcloud_from_depth
 import os
 import glob
 if TYPE_CHECKING:
@@ -54,33 +58,6 @@ class AllegroSceneCfg(InteractiveSceneCfg):
     )
     
     
-    # # For if we want there to be a surface other than the world under the screwdriver
-    # table
-    # table = AssetBaseCfg(
-    #     prim_path="{ENV_REGEX_NS}/Table",
-    #     spawn=sim_utils.CuboidCfg(
-    #         size=(0.6, 0.6, 0.01),  # LxWxH (m)
-    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(
-    #             rigid_body_enabled=True,
-    #             disable_gravity=True,  # Static table
-    #         ),
-    #         collision_props=sim_utils.CollisionPropertiesCfg(
-    #             contact_offset=0.005,
-    #             rest_offset=0.0,
-    #         ),
-    #         physics_material=sim_utils.RigidBodyMaterialCfg(
-    #             static_friction=0.0, 
-    #             dynamic_friction=0.0, 
-    #             restitution=0.0
-    #         ),
-    #         visual_material=sim_utils.PreviewSurfaceCfg(),
-    #     ),
-    #     init_state=AssetBaseCfg.InitialStateCfg(
-    #         pos=(0.0, 0.0, 0.005),  # Half height above z=0
-    #         rot=(1.0, 0.0, 0.0, 0.0),
-    #     ),
-    # )
-    
     # screwdriver
     screwdriver: AssetBaseCfg = ScrewdriverCfg(prim_path="{ENV_REGEX_NS}/Screwdriver")
     
@@ -96,6 +73,60 @@ class AllegroSceneCfg(InteractiveSceneCfg):
         debug_vis=True,
     )
     # screwdriver_joint_path = "{ENV_REGEX_NS}/Joints/screwdriver_tip_joint"
+
+
+@configclass
+class AllegroSceneWithCameraCfg(InteractiveSceneCfg):
+    """Configuration for the screwdriver scene with tiled camera for point cloud extraction."""
+
+    # Allow per-environment USD differences so we can swap geometry references
+    replicate_physics = False
+    # ground plane
+    ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
+
+    # lights
+    dome_light = AssetBaseCfg(
+        prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
+    )
+    
+    
+    # screwdriver
+    screwdriver: AssetBaseCfg = ScrewdriverCfg(prim_path="{ENV_REGEX_NS}/Screwdriver")
+    
+    # articulation
+    robot: ArticulationCfg = AllegroCfg(prim_path="{ENV_REGEX_NS}/Robot")
+    
+    contact_forces: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*_aftc_base_link$",
+        # prim_path="{ENV_REGEX_NS}/Robot/.*ee$",
+    
+        update_period=0.0,
+        history_length=6,
+        debug_vis=True,
+    )
+    
+    # Tiled camera for point cloud extraction
+    tiled_camera: TiledCameraCfg = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Camera",
+        update_period=0.0,  # Non-zero update period
+        data_types=["rgb", "distance_to_image_plane"],  # RGB and depth for logging
+        width=32, height=32,  # Slightly larger resolution
+        colorize_semantic_segmentation=False,
+        colorize_instance_segmentation=False,
+        colorize_instance_id_segmentation=False,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0, 
+            focus_distance=400.0,
+            horizontal_aperture=20.955, 
+            clipping_range=(0.05, 5.0),  # Closer near plane to see nearby objects
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(-0.2, 0.3, 0.3),  # Closer position to the side (Y axis) at hand height
+            rot=(0.224144, -0.129410, 0.836516, -0.482963),  # Rotated 180° around Z axis from previous orientation
+            convention="ros",
+        ),
+        debug_vis=False,  # Disable debug visualization
+    )
 
 
 def add_spherical_joint_at_tip(stage: Usd.Stage,
@@ -149,11 +180,11 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
     screwdriver_cfg = ScrewdriverCfg()
     tip_offset_local = screwdriver_cfg.tip_offset_local
     env_indices = env_ids.tolist() if env_ids is not None else list(range(env.scene.num_envs))
-
+    
     for env_i in env_indices:
         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
         base = f"/World/envs/env_{env_i}"
-
+        
         # Compute tip world position
         root_pose = screwdriver.data.root_state_w[env_i, :7]
         pos = root_pose[:3].cpu().numpy()
@@ -168,7 +199,7 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
             joint = UsdPhysics.Joint.Define(stage, joint_path)
         else:
             joint = UsdPhysics.Joint(stage.GetPrimAtPath(joint_path))
-        
+
         jp = stage.GetPrimAtPath(joint_path)
         
         # Body0 is world (don't set it), Body1 is screwdriver
@@ -181,7 +212,7 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
         # On the screwdriver, attach at the tip offset
         joint.CreateLocalPos1Attr().Set(Gf.Vec3f(*[float(v) for v in tip_offset_local]))
         joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-        
+                
         # Apply PhysX API to access advanced features
         PhysxSchema.PhysxJointAPI.Apply(jp)
         
@@ -242,6 +273,96 @@ def apply_screwdriver_friction(env, env_ids, static_friction, dynamic_friction, 
         success = bind_physics_material(screwdriver_prim_path, material_path)
         if not success:
             pass
+
+
+def get_camera_point_cloud(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None, asset_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera"), env_frame: bool = False) -> torch.Tensor:
+    """Extract point cloud from tiled camera using distance_to_image_plane data.
+    
+    Args:
+        env: The environment instance.
+        env_ids: Optional tensor of environment IDs to extract point clouds for. If None, extracts for all environments.
+        asset_cfg: Configuration for the tiled camera sensor.
+        env_frame: If True, returns points in environment frame (relative to env origin). 
+                   If False, returns points in world frame. Default is False.
+        
+    Returns:
+        Point cloud tensor with shape (num_envs, num_points, 3) where each point has [x, y, z].
+        By default, points are in world coordinates. Set env_frame=True for environment-relative coordinates.
+    """
+    # Access the camera sensor
+    camera = env.scene[asset_cfg.name]
+    camera_data = camera.data
+    
+    # Get depth data (distance_to_image_plane)
+    depth = camera_data.output["distance_to_image_plane"]  # (num_envs, height, width)
+    
+    num_envs = depth.shape[0]
+    
+    # Determine which environments to process
+    if env_ids is not None:
+        env_indices = env_ids.cpu().tolist() if isinstance(env_ids, torch.Tensor) else list(env_ids)
+    else:
+        env_indices = list(range(num_envs))
+    
+    # Extract point clouds for each environment
+    point_clouds = []
+    
+    for env_idx in env_indices:
+        if env_idx >= num_envs:
+            continue
+            
+        # Get depth for this environment
+        env_depth = depth[env_idx]  # (height, width)
+        
+        # Use create_pointcloud_from_depth utility
+        # The function likely expects: intrinsics and other camera parameters, not the camera object
+        # Try with just the depth and the camera's intrinsic matrix
+        point_cloud = create_pointcloud_from_depth(
+            intrinsic_matrix=camera.data.intrinsic_matrices[env_idx],
+            depth=env_depth,
+            device=env.device,
+        )
+        
+        # Randomly sample (or pad) to 1024 points
+        num_samples = 1024
+        if point_cloud.shape[0] >= num_samples:
+            idx = torch.randperm(point_cloud.shape[0], device=point_cloud.device)[:num_samples]
+            point_cloud = point_cloud[idx]
+        else:
+            repeat = num_samples - point_cloud.shape[0]
+            extra = point_cloud[torch.randint(point_cloud.shape[0], (repeat,), device=point_cloud.device)]
+            point_cloud = torch.cat([point_cloud, extra], dim=0)
+        point_clouds.append(point_cloud)
+    
+    # Pad point clouds to same size (max number of points) for batching
+    if point_clouds:
+        max_points = max(pc.shape[0] for pc in point_clouds)
+        
+        # Stack and pad
+        padded_point_clouds = []
+        for pc in point_clouds:
+            if pc.shape[0] < max_points:
+                # Pad with zeros
+                padding = torch.zeros((max_points - pc.shape[0], pc.shape[1]), 
+                                    device=pc.device, dtype=pc.dtype)
+                pc = torch.cat([pc, padding], dim=0)
+            padded_point_clouds.append(pc)
+        
+        point_cloud_batch = torch.stack(padded_point_clouds, dim=0)  # (num_selected_envs, num_points, 3)
+        
+        # Transform to environment frame if requested
+        if env_frame:
+            # Get environment origins for selected environments
+            env_indices_tensor = torch.tensor(env_indices, device=env.device, dtype=torch.long)
+            env_origins = env.scene.env_origins[env_indices_tensor]  # (num_selected_envs, 3)
+            # Subtract environment origin from each point cloud
+            point_cloud_batch = point_cloud_batch - env_origins.unsqueeze(1)  # Broadcast: (num_selected_envs, 1, 3)
+        
+        return point_cloud_batch
+    else:
+        # Return empty point cloud
+        num_selected = len(env_indices) if env_ids is not None else num_envs
+        return torch.zeros((num_selected, 0, 3), device=env.device)
 
 
 def add_screwdriver_rotation_markers(env, env_ids, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> None:
@@ -1007,7 +1128,7 @@ def log_yaw_velocity_comparison(env, env_ids=None) -> None:
     current_yaw_sample = screwdriver_yaw_angle_from_quaternion(env, asset_cfg=SceneEntityCfg("screwdriver"))[0].item() if env.num_envs > 0 else 0.0
     prev_yaw_sample = env._screwdriver_prev_yaw[0].item() if hasattr(env, "_screwdriver_prev_yaw") and env.num_envs > 0 else 0.0
     
-    print(f"[YAW_VEL_COMPARISON] Old (physics): avg={avg_rot_vel_old:.4f}, max={max_rot_vel_old:.4f} | New (yaw diff): avg={avg_rot_vel_new:.4f}, max={max_rot_vel_new:.4f} | Diff: avg={abs(avg_rot_vel_old - avg_rot_vel_new):.4f}, max={abs(max_rot_vel_old - max_rot_vel_new):.4f} | Ratio (new/old): avg={avg_ratio:.4f}, max={max_ratio:.4f} | Debug: current_yaw={current_yaw_sample:.4f}, prev_yaw={prev_yaw_sample:.4f}")
+    # print(f"[YAW_VEL_COMPARISON] Old (physics): avg={avg_rot_vel_old:.4f}, max={max_rot_vel_old:.4f} | New (yaw diff): avg={avg_rot_vel_new:.4f}, max={max_rot_vel_new:.4f} | Diff: avg={abs(avg_rot_vel_old - avg_rot_vel_new):.4f}, max={abs(max_rot_vel_old - max_rot_vel_new):.4f} | Ratio (new/old): avg={avg_ratio:.4f}, max={max_ratio:.4f} | Debug: current_yaw={current_yaw_sample:.4f}, prev_yaw={prev_yaw_sample:.4f}")
 
 
 def log_contact_sensor_sample(env, env_ids=None) -> None:
@@ -1060,6 +1181,58 @@ def contact_forces_obs(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> to
     return forces.flatten(start_dim=1)
 
 
+def point_cloud_obs(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera")) -> torch.Tensor:
+    """Observation function for point cloud from tiled camera.
+    
+    Args:
+        env: The environment instance.
+        sensor_cfg: Configuration for the tiled camera sensor.
+        
+    Returns:
+        Flattened point cloud tensor with shape (num_envs, num_points * 3).
+        Points are in environment frame (relative to env origin).
+    """
+    # Get point cloud in environment frame and flatten for observation
+    point_cloud = get_camera_point_cloud(env, env_frame=True, asset_cfg=sensor_cfg)  # (num_envs, num_points, 3)
+    # Flatten to (num_envs, num_points * 3)
+    return point_cloud.reshape(point_cloud.shape[0], -1)
+
+
+def plot_point_cloud_debug(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None, sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera")) -> None:
+    """Display a Matplotlib 3D scatter of the first env's point cloud for debugging."""
+
+    if hasattr(env, "_point_cloud_plot_done") and env._point_cloud_plot_done:
+        return
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("[POINT_CLOUD_PLOT] matplotlib not installed; skipping plot.")
+        env._point_cloud_plot_done = True
+        return
+
+    pc = get_camera_point_cloud(env, env_frame=True, asset_cfg=sensor_cfg)
+    if pc.numel() == 0:
+        print("[POINT_CLOUD_PLOT] Empty point cloud; ensure camera is configured correctly.")
+        env._point_cloud_plot_done = True
+        return
+
+    env_idx = 0 if env_ids is None or len(env_ids) == 0 else int(env_ids[0])
+    env_idx = max(0, min(env_idx, pc.shape[0] - 1))
+    pts = pc[env_idx].detach().cpu().numpy()
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+    ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], s=1)
+    ax.set_title(f"Point Cloud (env {env_idx})")
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.set_zlabel("z [m]")
+    plt.show(block=True)
+
+    env._point_cloud_plot_done = True
+
+
 @configclass
 class ObservationsCfg:
     """Observation specifications for the MDP."""
@@ -1107,6 +1280,77 @@ class ObservationsCfg:
             func=screwdriver_angular_velocity_z,
             noise=None,
             params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        )
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    # observation groups
+    policy: PolicyCfg = PolicyCfg()
+    
+
+
+@configclass
+class PointCloudObservationCfg:
+    """Observation specifications for the MDP with contact sensor data."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Observations for policy group including contact forces."""
+
+        # observation terms (order preserved)
+        point_cloud = ObsTerm(
+            func=point_cloud_obs,
+            noise=None,
+            params={"sensor_cfg": SceneEntityCfg("tiled_camera")},
+        )
+
+        joint_pos = ObsTerm(func=joint_pos_in_order, noise=None, 
+                        params={"asset_cfg": SceneEntityCfg("robot",
+                        joint_names=["allegro_hand_hitosashi_finger_finger_joint_0",
+                                        "allegro_hand_hitosashi_finger_finger_joint_1",
+                                        "allegro_hand_hitosashi_finger_finger_joint_2",
+                                        "allegro_hand_hitosashi_finger_finger_joint_3",
+                                        "allegro_hand_naka_finger_finger_joint_4",
+                                        "allegro_hand_naka_finger_finger_joint_5",
+                                        "allegro_hand_naka_finger_finger_joint_6",
+                                        "allegro_hand_naka_finger_finger_joint_7",
+                                        "allegro_hand_kusuri_finger_finger_joint_8",
+                                        "allegro_hand_kusuri_finger_finger_joint_9",
+                                        "allegro_hand_kusuri_finger_finger_joint_10",
+                                        "allegro_hand_kusuri_finger_finger_joint_11",
+                                        "allegro_hand_oya_finger_joint_12",
+                                        "allegro_hand_oya_finger_joint_13",
+                                        "allegro_hand_oya_finger_joint_14",
+                                        "allegro_hand_oya_finger_joint_15"])})
+
+        # Screwdriver pose (position + quaternion)
+        screwdriver_pose = ObsTerm(
+            func=screwdriver_pose,
+            noise=None,
+            params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        )
+
+        # Screwdriver z-axis orientation (for upright tracking)
+        screwdriver_orientation_z = ObsTerm(
+            func=screwdriver_orientation_z_axis,
+            noise=None,
+            params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        )
+
+        # Screwdriver angular velocity around z-axis (for rotation tracking)
+        screwdriver_angular_velocity_z = ObsTerm(
+            func=screwdriver_angular_velocity_z,
+            noise=None,
+            params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        )
+
+        # Contact forces from finger tips
+        contact_forces = ObsTerm(
+            func=contact_forces_obs,
+            noise=None,
+            params={"sensor_cfg": SceneEntityCfg("contact_forces")},
         )
 
         def __post_init__(self) -> None:
@@ -1331,6 +1575,18 @@ class EventCfg:
     #     params={"asset_cfg": SceneEntityCfg("screwdriver"), "mass_range": (0.05, 0.20)},
     # )
 
+    # plot_point_cloud = EventTerm(
+    #     func=plot_point_cloud_debug,
+    #     mode="reset",
+    #     params={"sensor_cfg": SceneEntityCfg("tiled_camera")},
+    # )
+
+    # optional: have an event that applies an initial twist to the screwdriver at reset
+    # twist_screwdriver = EventTerm(
+    #     func=apply_twist_to_screwdriver,
+    #     mode="reset",
+    #     params={
+
 
 
 
@@ -1531,6 +1787,30 @@ class ScrewdriverCurriculumEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.origin_type = "world"
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
+
+@configclass
+class TestPointCloudEnvCfg(ManagerBasedRLEnvCfg):
+    """Test configuration with tiled camera and point cloud observations."""
+
+    scene = AllegroSceneWithCameraCfg(num_envs=256, env_spacing=4.0, clone_in_fabric=False)
+    actions: ActionsCfg = ActionsCfg()
+    rewards: RewardsCfg = RewardsCfg()
+    observations: PointCloudObservationCfg = PointCloudObservationCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+    events: EventCfg = EventCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
+
+    def __post_init__(self) -> None:
+        self.decimation = 2
+        self.episode_length_s = 5
+        # Viewer configuration similar to TestEnvCfg for visual debugging
+        self.viewer.eye = (2.0, 0.0, 1.0)
+        self.viewer.lookat = (0.0, 0.0, 0.0)
+        self.viewer.origin_type = "world"
+        self.sim.dt = 1 / 120
+        self.sim.render_interval = self.decimation
+        self.sim.physx.solver_position_iteration_count = 16
+        self.sim.physx.solver_velocity_iteration_count = 4
 
 
 

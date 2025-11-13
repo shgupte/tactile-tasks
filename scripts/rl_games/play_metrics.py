@@ -233,6 +233,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     net_yaw_from_mean_series = []  # list[float], integrated mean signed yaw rate
     # integrated signed yaw per-env (radians)
     yaw_cumulative = None
+    # track which envs were done in previous step (to reset yaw_cumulative at start of new trial)
+    prev_done_mask = None
     # total completed episodes across envs (for --runs)
     run_count = 0
     # fall event tracking
@@ -240,7 +242,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     falls_per_step = []  # list[int] number of new falls at each step
     # episode-based net yaw tracking (displacement from start per trial)
     init_quat = None  # torch.Tensor (N,4)
+    prev_yaw = None  # torch.Tensor (N,) - previous step yaw angle for velocity computation
     net_yaw_trials = []  # list[float]
+    # running statistics for trial_net_yaw (Welford's algorithm)
+    trial_net_yaw_count = 0  # int
+    trial_net_yaw_mean = 0.0  # float
+    trial_net_yaw_M2 = 0.0  # float, sum of squared differences from mean
     # per-env fall counters per trial
     current_trial_fallen = None  # torch.BoolTensor (N,)
     fallen_trials = None  # torch.IntTensor (N,)
@@ -303,34 +310,62 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # Note: extras may contain per-episode logs; here we just count terminations.
             # If asymmetric truncations/terminations matter, both are already in dones.
             completed_this_step = int(dones.sum().item()) if hasattr(dones, "sum") else 0
-            # capture trial net yaw for done envs using pre-step yaw and update fall counters
-            if completed_this_step:
-                done_ids_tensor = torch.nonzero(dones, as_tuple=False).flatten()
-                if yaw_rel_pre is not None and done_ids_tensor.numel() > 0:
-                    for idx in done_ids_tensor.tolist():
-                        net_yaw_trials.append(float(torch.abs(yaw_rel_pre[idx]).item()))
-                # update per-env fall counters
-                if total_trials_env is not None and done_ids_tensor.numel() > 0:
-                    total_trials_env[done_ids_tensor] += 1
-                    fallen_trials[done_ids_tensor] += current_trial_fallen[done_ids_tensor].to(torch.int32)
-                    current_trial_fallen[done_ids_tensor] = False
+            done_ids_tensor = torch.nonzero(dones, as_tuple=False).flatten() if completed_this_step > 0 else None
 
             # ---- metrics: screwdriver rotation and drop-rate ----
             try:
                 screwdriver = base_env.scene["screwdriver"]
-                # yaw angular speed (local z)
-                ang_w = screwdriver.data.root_ang_vel_w  # (N, 3)
                 quat_w = screwdriver.data.root_quat_w    # (N, 4) wxyz
                 R = matrix_from_quat(quat_w)             # (N, 3, 3)
-                ang_local = torch.bmm(R.transpose(-2, -1), ang_w.unsqueeze(-1)).squeeze(-1)
-                yaw_signed = ang_local[:, 2]            # (N,)
-                yaw_speed = yaw_signed.abs()            # (N,)
+                
+                # Compute current yaw angle from quaternion (relative to initial orientation)
+                if init_quat is None or init_quat.shape != quat_w.shape:
+                    init_quat = quat_w.clone()
+                R_init = matrix_from_quat(init_quat)
+                R_rel = torch.bmm(R, R_init.transpose(-2, -1))
+                current_yaw = torch.atan2(R_rel[:, 1, 0], R_rel[:, 0, 0])  # (N,)
+                
+                # Compute yaw velocity from orientation change (more reliable than physics engine)
+                if prev_yaw is None or prev_yaw.shape[0] != current_yaw.shape[0]:
+                    # First iteration: initialize and return 0 velocity
+                    prev_yaw = current_yaw.clone()
+                    yaw_cumulative = torch.zeros_like(current_yaw)
+                    prev_done_mask = torch.zeros_like(current_yaw, dtype=torch.bool)
+                    yaw_signed = torch.zeros_like(current_yaw)
+                else:
+                    # Reset yaw tracking for environments that were done in previous step
+                    if prev_done_mask is not None and prev_done_mask.any():
+                        yaw_cumulative[prev_done_mask] = 0.0
+                        prev_yaw[prev_done_mask] = current_yaw[prev_done_mask].clone()
+                    
+                    # Compute yaw velocity: (current - prev) / dt with angle unwrapping
+                    yaw_diff = current_yaw - prev_yaw
+                    # Unwrap angles: if difference > pi, subtract 2*pi; if < -pi, add 2*pi
+                    yaw_diff = yaw_diff - 2 * math.pi * torch.round(yaw_diff / (2 * math.pi))
+                    yaw_signed = yaw_diff / dt  # (N,) yaw velocity in rad/s
+                    
+                    # Update prev_yaw for next step
+                    prev_yaw = current_yaw.clone()
+                
+                yaw_speed = yaw_signed.abs()  # (N,)
                 step_yaw_signed_mean = float(yaw_signed.mean().item())
-
-                # integrate net yaw per env
-                if yaw_cumulative is None or yaw_cumulative.shape[0] != yaw_signed.shape[0]:
-                    yaw_cumulative = torch.zeros_like(yaw_signed)
+                
+                # Accumulate yaw for all environments (using computed velocity)
                 yaw_cumulative = yaw_cumulative + yaw_signed * dt
+                
+                # capture trial net yaw for done envs using cumulative yaw (unwrapped) - after updating cumulative
+                if done_ids_tensor is not None and done_ids_tensor.numel() > 0:
+                    for idx in done_ids_tensor.tolist():
+                        # Use cumulative yaw which tracks unwrapped total rotation
+                        trial_value = float(torch.abs(yaw_cumulative[idx]).item())
+                        net_yaw_trials.append(trial_value)
+                        # update running statistics using Welford's algorithm
+                        trial_net_yaw_count += 1
+                        delta = trial_value - trial_net_yaw_mean
+                        trial_net_yaw_mean += delta / trial_net_yaw_count
+                        delta2 = trial_value - trial_net_yaw_mean
+                        trial_net_yaw_M2 += delta * delta2
+                        # Note: yaw_cumulative will be reset at start of next iteration via prev_done_mask
 
                 # fall detection based on pitch/roll > threshold (upright deviation)
                 pos_w = screwdriver.data.root_pos_w      # (N, 3)
@@ -354,6 +389,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 # mark envs that have fallen in this trial
                 if current_trial_fallen is not None:
                     current_trial_fallen |= dropped
+                
+                # update per-env fall counters for done envs
+                if done_ids_tensor is not None and done_ids_tensor.numel() > 0:
+                    if total_trials_env is not None:
+                        total_trials_env[done_ids_tensor] += 1
+                        fallen_trials[done_ids_tensor] += current_trial_fallen[done_ids_tensor].to(torch.int32)
+                        current_trial_fallen[done_ids_tensor] = False
 
                 step_yaw_mean = float(yaw_speed.mean().item())
                 step_drop_mean = float(dropped.float().mean().item())
@@ -393,6 +435,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 # Stop after enough samples collected
                 if len(yaw_rate_series) >= args_cli.samples:
                     break
+                
+                # Update prev_done_mask for next iteration (to reset yaw_cumulative at start of new trials)
+                if hasattr(dones, 'clone'):
+                    prev_done_mask = dones.clone()
+                elif hasattr(dones, '__iter__'):
+                    # Convert to tensor if it's a list/array
+                    if prev_done_mask is not None:
+                        prev_done_mask = torch.tensor(dones, device=prev_done_mask.device, dtype=torch.bool)
+                    else:
+                        prev_done_mask = torch.tensor(dones, dtype=torch.bool)
             except Exception:
                 # Keep play robust even if task doesn't include the screwdriver
                 pass
@@ -428,11 +480,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         trials_count = len(net_yaw_trials)
         trials_mean = sum(net_yaw_trials)/trials_count if trials_count else 0.0
         trials_max = max(net_yaw_trials) if trials_count else 0.0
+        # calculate standard deviation from running statistics (sample std dev for significance testing)
+        if trial_net_yaw_count > 1:
+            trial_net_yaw_std = math.sqrt(trial_net_yaw_M2 / (trial_net_yaw_count - 1))
+        elif trial_net_yaw_count == 1:
+            trial_net_yaw_std = 0.0
+        else:
+            trial_net_yaw_std = 0.0
         # overall fall fraction across all envs and trials
         total_trials_sum = int(total_trials_env.sum().item()) if total_trials_env is not None else 0
         fallen_trials_sum = int(fallen_trials.sum().item()) if fallen_trials is not None else 0
         fall_fraction = (fallen_trials_sum / total_trials_sum) if total_trials_sum > 0 else 0.0
-        print(f"[SUMMARY] mean_trial_net_yaw={trials_mean:.4f} rad, fall_fraction={fall_fraction:.3f} ({fallen_trials_sum}/{total_trials_sum})")
+        print(f"[SUMMARY] mean_trial_net_yaw={trials_mean:.4f} rad, std_trial_net_yaw={trial_net_yaw_std:.4f} rad, fall_fraction={fall_fraction:.3f} ({fallen_trials_sum}/{total_trials_sum})")
         if args_cli.metrics_out:
             with open(args_cli.metrics_out, "w", newline="") as f:
                 writer = csv.writer(f)
@@ -462,6 +521,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 writer.writerow(["trial_index", "net_yaw_displacement_rad"])
                 for i, val in enumerate(net_yaw_trials):
                     writer.writerow([i, val])
+                # Write summary statistics
+                writer.writerow([])
+                writer.writerow(["statistic", "value"])
+                writer.writerow(["mean_trial_net_yaw_rad", trials_mean])
+                writer.writerow(["std_trial_net_yaw_rad", trial_net_yaw_std])
+                writer.writerow(["count", trial_net_yaw_count])
             print(f"[INFO] Wrote metrics CSV to: {args_cli.metrics_out}")
 
     # close the simulator

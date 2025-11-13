@@ -88,6 +88,22 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import tactile_tasks.tasks  # noqa: F401
 
+# Ensure custom rl-games networks (PointNetPolicy) are registered
+try:
+    # Try importing via package-style path if available
+    from scripts.rl_games import custom_models  # type: ignore # noqa: F401
+except Exception:
+    # Fallback: import the file directly so @register_network runs
+    import importlib.util
+    this_dir = os.path.dirname(__file__)
+    mod_path = os.path.join(this_dir, "custom_models.py")
+    if os.path.isfile(mod_path):
+        spec = importlib.util.spec_from_file_location("custom_models", mod_path)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["custom_models"] = mod
+            spec.loader.exec_module(mod)
+
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):

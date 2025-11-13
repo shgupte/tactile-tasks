@@ -29,8 +29,8 @@ params:
           name: default
         sigma_init:
           name: const_initializer
-          val: .003 # 0.0035 # used to be 0.0035 # prev training was with 0.001 + fixed
-        fixed_sigma: False # used to be True 
+          val: .002 # 0.0035 # used to be 0.0035 # prev training was with 0.001 + fixed
+        fixed_sigma: True # used to be True 
     mlp:
       # Larger network for complex hand manipulation
       units: [512, 512, 256, 128]
@@ -42,7 +42,7 @@ params:
         name: None
     # PointNet front-end configuration (parsed by the custom network)
     pointnet:
-      pc_points: 4096        # number of points expected in the point cloud
+      pc_points: 1024        # number of points expected in the point cloud
       pc_channels: 3         # e.g., 3=xyz, 6=xyzrgb
       global_feat_dim: 1024  # latent size output by PointNet
       use_feature_transform: True
@@ -76,7 +76,7 @@ params:
     # PPO hyperparameters optimized for hand manipulation
     gamma: 0.995  # Higher discount for longer-term rewards
     tau: 0.95     # GAE parameter
-    learning_rate: 1e-4  # Lowered for stability
+    learning_rate: 5e-5  # Lowered for stability
     lr_schedule: adaptive
     kl_threshold: 0.008
     score_to_win: 100000  # Higher target for complex task
@@ -98,7 +98,7 @@ params:
     
     # Experience collection - optimized for RTX 4070 Ti
     horizon_length: 256  # Longer horizon for complex manipulation
-    minibatch_size: 4096  # Larger batch size to utilize 12GB VRAM
+    minibatch_size: 128  # Larger batch size to utilize 12GB VRAM
     mini_epochs: 5  # More epochs per update
     
     # Value function settings
